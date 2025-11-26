@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 
 import { PanelPlugin, type PanelProps, type StandardEditorProps } from '@grafana/data';
 import { Select, TextArea } from '@grafana/ui';
@@ -25,7 +25,7 @@ const ValueSelect: React.FC<{
 
   return (
     <Select
-      width={24}
+      width={40}
       allowCustomValue
       inputId={selectId}
       name={selectId}
@@ -50,6 +50,7 @@ const ValueSelect: React.FC<{
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data }) => {
   const [demoOption, setDemoOption] = useState<string | null>(null);
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
+  const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
 
   const resolveDatasourceUid = async (): Promise<string | null> => {
     let uid =
@@ -77,6 +78,32 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
 
     return null;
+  };
+
+  const renderValueSelectForWrapper = (
+    wrapper: HTMLElement,
+    opts: Option[],
+    operator?: string,
+    streamField?: string,
+    placeholder?: string
+  ) => {
+    const selectId = streamField ? `stream-value-${streamField}` : 'stream-value-select';
+    let root = valueSelectRoots.get(wrapper);
+    if (!root) {
+      root = createRoot(wrapper);
+      valueSelectRoots.set(wrapper, root);
+    }
+
+    root.render(
+      <ValueSelect
+        options={opts}
+        operator={operator}
+        streamField={streamField}
+        selectId={selectId}
+        placeholder={placeholder}
+        onInput={inputValue => streamFieldOnValueInputChange(wrapper, inputValue, operator, streamField)}
+      />
+    );
   };
 
   const streamFieldOnValueInputChange = async (
@@ -113,8 +140,20 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
     try {
       const resp = await getBackendSrv().post(path, payload);
-      if (textarea) {
-        textarea.value = JSON.stringify(resp);
+      // if (textarea) {
+      //   textarea.value = JSON.stringify(resp);
+      // }
+
+      if (source && source instanceof HTMLElement) {
+        const options =
+          Array.isArray(resp?.values) && resp.values.length
+            ? resp.values.map((item: any) => ({ 
+              label: ('(' + String(item.hits) + ')' + item?.value), 
+              value: item?.value 
+            }))
+            : [];
+        renderValueSelectForWrapper(source, options, operator, streamField);
+        textarea.value = JSON.stringify(options);
       }
 
       // eslint-disable-next-line no-console
@@ -143,15 +182,57 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const operator = jsonData?.operator;
     const streamField = jsonData?.stream_field ?? jsonData?.stream_feild;
 
-    if (!streamField || !(operator === '=' || operator === '!=')) {
-      return;
-    }
-
     const targetCell = valueCell ?? (selectEl.parentElement?.nextElementSibling as HTMLElement | null);
     if (!targetCell) {
       return;
     }
 
+    switch (operator) {
+      case '':
+        while (targetCell.firstChild) {
+          targetCell.removeChild(targetCell.firstChild);
+        }
+        return;
+      case '=':
+      case '!=':
+        if (!streamField) {
+          return;
+        }
+        await showStreamFieldValueSelector(targetCell, operator, streamField);
+        return;
+      case '=~':
+      case '!~':
+        while (targetCell.firstChild) {
+          targetCell.removeChild(targetCell.firstChild);
+        }
+        {
+          const root = createRoot(targetCell);
+          root.render(
+            <input
+              type="text"
+              style={{ width: '400px', height: '32px', padding: '4px 8px' }}
+              placeholder="enter value"
+              onChange={e => {
+                const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+                if (textarea) {
+                  textarea.value = e.currentTarget.value;
+                }
+              }}
+            />
+          );
+        }
+        return;
+      default:
+        alert("not support operator:" + operator);
+        return;
+    }
+  };
+
+  const showStreamFieldValueSelector = async (
+    targetCell: HTMLElement,
+    operator?: string,
+    streamField?: string
+  ) => {
     while (targetCell.firstChild) {
       targetCell.removeChild(targetCell.firstChild);
     }
@@ -160,21 +241,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     wrapper.dataset.streamValueSelect = 'true';
     targetCell.appendChild(wrapper);
 
-    const renderValueSelect = (opts: Option[], placeholder?: string, operatorParam?: string, streamFieldParam?: string) => {
-      const root = createRoot(wrapper);
-      const selectId = streamFieldParam ? `stream-value-${streamFieldParam}` : 'stream-value-select';
-      root.render(
-        <ValueSelect
-          options={opts}
-          operator={operatorParam}
-          streamField={streamFieldParam}
-          selectId={selectId}
-          onInput={inputValue => streamFieldOnValueInputChange(wrapper, inputValue, operatorParam, streamFieldParam)}
-        />
-      );
-    };
-
-    renderValueSelect([], 'loading...', operator, streamField);
+    renderValueSelectForWrapper(wrapper, [], operator, streamField, 'loading...');
 
     const uid = await resolveDatasourceUid();
     if (!uid) {
@@ -183,28 +250,23 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
 
-    const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`;
-    const payload = {
-      field: streamField,
-      query: '*',
-      start: '',
-      end: '',
-      limit: '50',
-    };
-
-    getBackendSrv()
-      .post(path, payload)
-      .then(resp => {
-        const options =
-          Array.isArray(resp?.values) && resp.values.length
-            ? resp.values.map((item: any) => ({ label: item?.value ?? '', value: item?.value ?? '' }))
-            : [];
-        renderValueSelect(options, undefined, operator, streamField);
-      })
-      .catch(err => {
-        // eslint-disable-next-line no-console
-        console.error('stream_field_values error', err);
+    try {
+      const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`, {
+        field: streamField,
+        query: '*',
+        start: '',
+        end: '',
+        limit: '50',
       });
+      const options =
+        Array.isArray(resp?.values) && resp.values.length
+          ? resp.values.map((item: any) => ({ label: item?.value ?? '', value: item?.value ?? '' }))
+          : [];
+      renderValueSelectForWrapper(wrapper, options, operator, streamField);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('stream_field_values error', err);
+    }
   };
 
   const each_stream_feild = (stream_field_name: string, hits: number) => {
@@ -227,6 +289,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const valueTd = document.createElement('td');
     const select = document.createElement('select');
     select.style.height = '32px';
+    select.style.width = '180px';
     select.style.padding = '4px 8px';
     select.style.marginRight = '8px';
     [
