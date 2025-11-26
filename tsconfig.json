@@ -9,7 +9,9 @@
     "resolveJsonModule": true,
     "useUnknownInCatchVariables": true,
     "incremental": true,
-    "tsBuildInfoFile": "./tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": "./tsconfig.tsbuildinfo",
+    "sourceMap": true,
+    "inlineSources": true
   },
   "extends": "./.config/tsconfig.json",
 }

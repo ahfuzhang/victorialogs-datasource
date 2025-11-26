@@ -154,6 +154,7 @@ build_golang:
 
 front:
 	yarn build
+	# yarn build --env development
 
 docker_pull:
 	docker pull grafana/grafana:12.1

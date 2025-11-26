@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { PanelPlugin, type PanelProps, type StandardEditorProps } from '@grafana/data';
@@ -10,14 +10,18 @@ interface LogFilterOptions {
 }
 
 type Option = { label: string; value: string };
+type Filter = { operator: string; value: string };
+type PanelContext = { streamFilters: React.MutableRefObject<Record<string, Filter>> };
 
 const ValueSelect: React.FC<{
   options: Option[];
   operator?: string;
   streamField?: string;
   selectId: string;
-  onInput?: (val: string | undefined | null) => void;
-}> = ({ options, operator, streamField, selectId, onInput }) => {
+  placeholder?: string;
+  onInput?: (val: string | undefined | null) => void | Promise<void>;
+  panelCtx: PanelContext;
+}> = ({ options, operator, streamField, selectId, placeholder, onInput, panelCtx }) => {
   const [localOptions, setLocalOptions] = useState<Option[]>(options);
   useEffect(() => {
     setLocalOptions(options);
@@ -29,14 +33,10 @@ const ValueSelect: React.FC<{
       allowCustomValue
       inputId={selectId}
       name={selectId}
-      placeholder="type or select"
+      placeholder={placeholder ?? 'type or select'}
       options={localOptions}
       onChange={v => {
-        const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-        if (textarea) {
-          const text = `${streamField ?? ''} ${operator ?? ''} ${v.value ?? ''}`.trim();
-          textarea.value = text;
-        }
+        getFieldsByStreamFields(panelCtx, streamField, operator, v.value);
       }}
       onInputChange={(inputValue, actionMeta: any) => {
         if (actionMeta?.action === 'input-change') {
@@ -47,16 +47,39 @@ const ValueSelect: React.FC<{
   );
 };
 
+const getFieldsByStreamFields = (
+  panelCtx: PanelContext | undefined,
+  streamField?: string,
+  operator?: string,
+  value?: string | null
+) => {
+  const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+  if (textarea) {
+    const text = `${streamField ?? ''} ${operator ?? ''} ${value ?? ''}`.trim();
+    textarea.value = text;
+  }
+  const m = panelCtx?.streamFilters?.current;
+  if (m && streamField) {
+    m[streamField] = { operator: operator ?? '', value: value ?? '' };
+  }
+};
+
+
+
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data }) => {
   const [demoOption, setDemoOption] = useState<string | null>(null);
+  const [fieldSelectorValue, setFieldSelectorValue] = useState<string | null>(null);
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
   const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
+  const streamFieldMapRef = useRef<Record<string, null>>({});
+  const fieldMapRef = useRef<Record<string, any>>({});
+  const streamFiltersRef = useRef<Record<string, Filter>>({});
 
   const resolveDatasourceUid = async (): Promise<string | null> => {
+    const targets = (data as any)?.request?.targets;
     let uid =
       datasourceUid ??
-      data?.request?.request?.targets?.[0]?.datasource?.uid ??
-      data?.request?.targets?.[0]?.datasource?.uid ??
+      targets?.[0]?.datasource?.uid ??
       (window as any)?.__grafanaSceneContext?.meta?.data?.request?.targets?.[0]?.datasource?.uid ??
       (window as any)?.__grafana_data?.request?.targets?.[0]?.datasource?.uid;
 
@@ -102,6 +125,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         selectId={selectId}
         placeholder={placeholder}
         onInput={inputValue => streamFieldOnValueInputChange(wrapper, inputValue, operator, streamField)}
+        panelCtx={{ streamFilters: streamFiltersRef }}
       />
     );
   };
@@ -153,7 +177,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
             }))
             : [];
         renderValueSelectForWrapper(source, options, operator, streamField);
-        textarea.value = JSON.stringify(options);
+        if (textarea) {
+          textarea.value = JSON.stringify(options);
+        }
       }
 
       // eslint-disable-next-line no-console
@@ -338,7 +364,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
 
   useEffect(() => {
-    const fetchFields = async () => {
+    const fetchSreamFields = async () => {
       const uid = await resolveDatasourceUid();
 
       if (!uid) {
@@ -346,10 +372,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         console.error('stream_field_names: datasource uid not found');
         return;
       }
-
-      const now = Date.now();
-      const start = timeRange?.from?.valueOf() ?? now;
-      const end = timeRange?.to?.valueOf() ?? now;
 
       const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_names`;
       const payload = {
@@ -365,24 +387,157 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         const resp = await getBackendSrv().post(path, payload);
         // eslint-disable-next-line no-console
         console.log('stream_field_names', resp);
+        //alert(1);
         on_stream_field_names_response(resp);
+        // 查询到 stream field 后，再调用 fetchFields();
+        console.info('stream_field_names:', resp);
+        fetchFields(resp);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error('stream_field_names error', err);
       }
     };
-    // 调用异步函数
-    fetchFields();
+
+    const fetchFields = async (streamFields: any) =>{
+      //alert(2);
+      console.info('stream_field_names:', streamFields);
+      const uid = await resolveDatasourceUid();
+      if (!uid) {
+        // eslint-disable-next-line no-console
+        //alert(3);
+        console.error('field_names: datasource uid not found');
+        return;
+      }
+
+      try {
+        const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
+          query: '*',
+          start: '',
+          end: '',
+          limit: '50',
+        });
+        handleFieldNamesResponse(streamFields, resp);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+       //alert(4);
+        console.error('field_names error', err);
+      }
+    };
+
+    fetchSreamFields();
+    
   }, [data, timeRange]);
 
+  const handleFieldNamesResponse = (streamFields: any, resp: any) => {
+    //alert(5);
+    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    if (!textarea){
+      return;
+    }
+    textarea.value += '\n\n' + JSON.stringify(resp);
+    console.info('stream_field_names:', streamFields);
+    const streamFieldMap: Record<string, null> = {};
+    if (Array.isArray(streamFields?.values)) {
+      streamFields.values.forEach((item: any) => {
+        const key = item?.value ?? '';
+        if (key !== '') {
+          streamFieldMap[key] = null;
+        }
+      });
+    }
+    streamFieldMapRef.current = streamFieldMap;
+    textarea.value += '\n\n' + JSON.stringify(streamFieldMap);
+    //
+    const sysFields: Record<string, null> = {
+      _msg: null,
+      _stream: null,
+      _stream_id: null,
+      _time: null,
+    };
+    const fieldMap: Record<string, null> = {};
+    if (Array.isArray(resp?.values)) {
+      resp.values.forEach((item: any) => {
+        const key = item?.value ?? '';
+        if (key === '') {
+          return;
+        }
+        if (key in sysFields) {
+          return;
+        }
+        if (key in streamFieldMap) {
+          return;
+        }
+        fieldMap[key] = null;
+      });
+    }
+    fieldMapRef.current = fieldMap;
+    textarea.value += '\n\n' + JSON.stringify(fieldMap);
+    // if (textarea) {
+    //   textarea.value = JSON.stringify(fieldMap);
+    // }
+    showFieldSelector()
+  };
+
+  const showFieldSelector = () => {
+    const tbody = document.getElementById('field_filter_tbody') as HTMLTableSectionElement | null;
+    if (!tbody) {
+      return;
+    }
+
+    while (tbody.firstChild) {
+      tbody.removeChild(tbody.firstChild);
+    }
+
+    const tr = document.createElement('tr');
+    const td1 = document.createElement('td');
+    //td1.textContent = 'field selector placeholder';
+    const selectMount = document.createElement('div');
+    td1.appendChild(selectMount);
+    const keys = Object.keys(fieldMapRef.current ?? {}).sort();
+    const options: Option[] = keys.map(k => ({ label: k, value: k }));
+    const root = createRoot(selectMount);
+    root.render(
+      <Select
+        width={40}
+        placeholder="Select field"
+        options={options}
+        value={options.find(o => o.value === fieldSelectorValue)}
+        onChange={v => setFieldSelectorValue(v.value ?? null)}
+        //panelCtx={{ fieldMapRef }}
+      />
+    );
+    tr.appendChild(td1);
+    
+    const td2 = document.createElement('td');
+    const opSelect = document.createElement('select');
+    opSelect.style.height = '32px';
+    opSelect.style.padding = '4px 8px';
+    opSelect.style.marginRight = '8px';
+    [
+      { value: ':=', label: ':= (equal)' },
+      { value: '!=', label: '!= (not equal)' },
+      { value: ':~', label: ':~  (regexp match)' },
+    ].forEach(opt => {
+      const option = document.createElement('option');
+      option.value = opt.value;
+      option.text = opt.label;
+      opSelect.appendChild(option);
+    });
+    td2.appendChild(opSelect);
+    tr.appendChild(td2);
+    const td3 = document.createElement('td');
+    td3.textContent = 'field selector placeholder';
+    tr.appendChild(td3);
+    tbody.appendChild(tr);
+  };
 
   return (
     <div style={{ height, padding: '16px', overflow: 'auto' }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%' }} border={0}>
+      <table style={{ borderCollapse: 'collapse', width: '100%' }} border={1}>
         <tbody>
           <tr>
-            <td rowSpan={2} style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }} width="100">
-              stream filter
+            <td style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }} width="100">
+              stream fields:
             </td>
             <td id="stream_filter_container" style={{ paddingBottom: '8px' }}>
               <table style={{ width: '500' }}>
@@ -391,13 +546,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
             </td>
           </tr>
           <tr>
-            <td style={{ paddingBottom: '8px' }}>
-              todo
+            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields:</td>
+            <td style={{ padding: '4px 0' }}>
+              <table style={{ width: '500' }}>
+                <tbody id="field_filter_tbody"></tbody>
+              </table>
             </td>
-          </tr>
-          <tr>
-            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields</td>
-            <td style={{ padding: '4px 0' }}>empty</td>
           </tr>
           <tr>
             <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>query options</td>
