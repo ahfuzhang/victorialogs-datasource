@@ -1,0 +1,23 @@
+{
+  "type": "panel",
+  "name": "LogFilter",
+  "id": "victoriametrics-logfilter-panel",
+  "info": {
+    "description": "LogFilter panel with a text box, button, and YAML configuration textarea.",
+    "author": {
+      "name": "VictoriaMetrics",
+      "url": "https://victoriametrics.com/"
+    },
+    "keywords": ["logs", "logfilter", "victoriametrics", "victorialogs"],
+    "logos": {
+      "small": "../../img/logo.svg",
+      "large": "../../img/logo.svg"
+    },
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.4.0",
+    "plugins": []
+  }
+}

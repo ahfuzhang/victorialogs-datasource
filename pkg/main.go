@@ -18,6 +18,7 @@ func main() {
 
 	pluginLogger.Info("Starting VL datasource")
 
+	// 数据源对象，用于映射 grafana 前端的请求路径
 	err := backend.Manage(VL_PLUGIN_ID, backend.ServeOpts{
 		CallResourceHandler: ds,
 		QueryDataHandler:    ds,

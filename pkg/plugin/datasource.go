@@ -47,12 +47,15 @@ type Datasource struct {
 }
 
 // NewDatasource creates a new datasource instance.
+// vlogs 实现的数据源
 func NewDatasource() *Datasource {
 	var ds Datasource
+	// 这里传入了一个回调函数
 	ds.im = datasource.NewInstanceManager(newDatasourceInstance)
 	ds.logger = log.New()
 
 	mux := http.NewServeMux()
+	// 从 grafana 前端过来的请求路径
 	mux.HandleFunc("/", ds.RootHandler)
 	mux.HandleFunc("/select/logsql/field_values", ds.VLAPIQuery)
 	mux.HandleFunc("/select/logsql/field_names", ds.VLAPIQuery)
@@ -155,7 +158,9 @@ func NewGrafanaSettings(settings backend.DataSourceInstanceSettings) (*GrafanaSe
 
 // DatasourceInstance is an example datasource which can respond to data queries, reports
 // its health and has streaming skills.
+// 这里包含了插件的配置
 type DatasourceInstance struct {
+	// 这里包含了插件的 settings. 猜测是配置数据源的页面里配置的内容
 	settings DataSourceInstanceSettings
 
 	httpClient          *http.Client
@@ -166,6 +171,7 @@ type DatasourceInstance struct {
 
 type DataSourceInstanceSettings struct {
 	// URL is the configured URL of a data source instance (e.g. the URL of an API endpoint).
+	// https://istio-api.sige-test.com/logging/k8s
 	URL string `json:"URL,omitempty"`
 
 	// VMUIURL specifies the URL for the VictoriaMetrics UI, derived from the data source's base URL if not explicitly set.
@@ -502,6 +508,7 @@ func (d *Datasource) CheckHealth(ctx context.Context, req *backend.CheckHealthRe
 }
 
 // RootHandler returns generic response to unsupported paths
+// 根路径，只是打印欢迎信息
 func (d *Datasource) RootHandler(rw http.ResponseWriter, req *http.Request) {
 	d.logger.Debug("Received resource call", "url", req.URL.String(), "method", req.Method)
 
@@ -514,10 +521,14 @@ func (d *Datasource) RootHandler(rw http.ResponseWriter, req *http.Request) {
 }
 
 // VLAPIQuery performs request to VL API endpoints that doesn't return frames
+// 与数据相关的查询，都在这个接口里
 func (d *Datasource) VLAPIQuery(rw http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
+	// ??? 插件上下文对象，用来干嘛的呢
 	pluginCxt := backend.PluginConfigFromContext(ctx)
-
+	/*
+	   body 的格式： {"query":"*","start":"1763913600000","end":"1763999999999","field":"kubernetes.container_name","limit":"25"}
+	*/
 	fieldsQuery, err := getFieldsQueryFromRaw(req.Body)
 	if err != nil {
 		writeError(rw, http.StatusInternalServerError, err)
@@ -529,27 +540,31 @@ func (d *Datasource) VLAPIQuery(rw http.ResponseWriter, req *http.Request) {
 			d.logger.Error("VLAPIQuery: failed to close request body", "err", err.Error())
 		}
 	}()
-
+	// 从 instance manager 中，获取实例， *DatasourceInstance
 	di, err := d.getInstance(ctx, pluginCxt)
 	if err != nil {
 		d.logger.Error("Error loading datasource", "error", err)
 		writeError(rw, http.StatusInternalServerError, err)
 		return
 	}
-
+	// di.settings.URL 是数据源中配置的 url
 	u, err := url.Parse(di.settings.URL)
 	if err != nil {
 		writeError(rw, http.StatusBadRequest, fmt.Errorf("failed to parse datasource url: %w", err))
 		return
 	}
+	// ??? 为什么要把路径拼接起来
+	// grafana: https://grafana.sige.la/api/datasources/uid/P47FB4B85AF58BB8F/resources/select/logsql/field_values
+	//    猜测是 /select/logsql/field_values
 	u.Path = path.Join(u.Path, req.URL.Path)
+	// post body 中的 json，转换为 query string
 	u.RawQuery = fieldsQuery.queryParams().Encode()
 	newReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), nil)
 	if err != nil {
 		writeError(rw, http.StatusBadRequest, fmt.Errorf("failed to create new request with context: %w", err))
 		return
 	}
-
+	// 从这里看，数据源只是透传了请求
 	newReq.Header = di.grafanaSettings.CustomHeaders.Clone()
 	resp, err := di.httpClient.Do(newReq)
 	if err != nil {
@@ -600,6 +615,7 @@ func (d *Datasource) VLAPIQuery(rw http.ResponseWriter, req *http.Request) {
 }
 
 // VMUIQuery generates VMUI link to a native dashboard
+// 只是产生了一个 url 而已
 func (d *Datasource) VMUIQuery(rw http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	pluginCxt := backend.PluginConfigFromContext(ctx)

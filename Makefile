@@ -132,3 +132,51 @@ GOBIN=$(LOCALBIN) go install $${package} ;\
 mv "$$(echo "$(1)" | sed "s/-$(3)$$//")" $(1) || echo "move not needed" ;\
 }
 endef
+
+
+npm_install:
+	npm install --force
+
+run_dev:
+	npm run dev
+
+npm_build:
+	npm run build --legacy-peer-deps
+
+yarn_install:
+	brew install yarn
+
+yarn_install:
+	yarn install
+
+build_golang:
+	MAGEFILE_VERBOSE=1 MAGEFILE_DEBUG=1 mage build
+
+front:
+	yarn build
+
+docker_pull:
+	docker pull grafana/grafana:12.1
+
+docker_run1:
+	docker run -it --rm \
+		--name grafana \
+		-p 3000:3000 \
+		-v ~/Downloads/temp/2025/grafana/data/:/var/lib/grafana \
+		-v ~/Downloads/temp/2025/grafana/config/:/etc/grafana \
+		-e GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS="victoriametrics-logs-datasource,victoriametrics-logfilter-panel" \
+		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
+		-v ~/Downloads/temp/2025/grafana/datasource/:/etc/grafana/provisioning/datasources/ \
+		-v ./plugins/victoriametrics-logs-datasource/panels/log-filter/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
+		grafana/grafana:12.1
+
+docker_run:
+	docker run -it --rm \
+		--name grafana \
+		-p 3000:3000 \
+		-v ./test/data/:/var/lib/grafana \
+		-v ./test/config/:/etc/grafana \
+		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
+		-v ./test/datasources/:/etc/grafana/provisioning/datasources/ \
+		-v ./plugins/victoriametrics-logs-datasource/panels/log-filter/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
+		grafana/grafana:12.1
