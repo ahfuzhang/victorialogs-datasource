@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
 
 import { PanelPlugin, type PanelProps, type StandardEditorProps } from '@grafana/data';
 import { Select, TextArea } from '@grafana/ui';
@@ -8,101 +9,262 @@ interface LogFilterOptions {
   yaml: string;
 }
 
-const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data }) => {
-  const [streamFilters, setStreamFilters] = useState([
-    { name: '', operator: '=', value: '' },
-    { name: '', operator: '=', value: '' },
-  ]);
+type Option = { label: string; value: string };
 
-  const [demoOption, setDemoOption] = useState<string | null>(null);
-  const controlStyle: React.CSSProperties = { height: '32px', padding: '4px 8px' };
-  const fieldOptions = ['', '_stream_id', 'namespace', 'pod'];
-  const operatorOptions = ['=', '!=', '=~', '!~'];
+const ValueSelect: React.FC<{
+  options: Option[];
+  operator?: string;
+  streamField?: string;
+  selectId: string;
+  onInput?: (val: string | undefined | null) => void;
+}> = ({ options, operator, streamField, selectId, onInput }) => {
+  const [localOptions, setLocalOptions] = useState<Option[]>(options);
+  useEffect(() => {
+    setLocalOptions(options);
+  }, [options]);
 
-  const on_operator_change = (select_dom: HTMLSelectElement) => {
-    // eslint-disable-next-line no-console
-    console.log('operator changed', select_dom.options[select_dom.selectedIndex].text);
-    let node = select_dom.previousElementSibling;
-    let hiddenInput = null;
-    while (node) {
-        if (node.tagName === 'INPUT' && node.type === 'hidden') {
-            hiddenInput = node;
-            break;
+  return (
+    <Select
+      width={24}
+      allowCustomValue
+      inputId={selectId}
+      name={selectId}
+      placeholder="type or select"
+      options={localOptions}
+      onChange={v => {
+        const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+        if (textarea) {
+          const text = `${streamField ?? ''} ${operator ?? ''} ${v.value ?? ''}`.trim();
+          textarea.value = text;
         }
-        node = node.previousElementSibling;
+      }}
+      onInputChange={(inputValue, actionMeta: any) => {
+        if (actionMeta?.action === 'input-change') {
+          onInput?.(inputValue);
+        }
+      }}
+    />
+  );
+};
+
+const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data }) => {
+  const [demoOption, setDemoOption] = useState<string | null>(null);
+  const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
+
+  const resolveDatasourceUid = async (): Promise<string | null> => {
+    let uid =
+      datasourceUid ??
+      data?.request?.request?.targets?.[0]?.datasource?.uid ??
+      data?.request?.targets?.[0]?.datasource?.uid ??
+      (window as any)?.__grafanaSceneContext?.meta?.data?.request?.targets?.[0]?.datasource?.uid ??
+      (window as any)?.__grafana_data?.request?.targets?.[0]?.datasource?.uid;
+
+    if (uid) {
+      setDatasourceUid(uid);
+      return uid;
     }
-    if (!hiddenInput){
-      console.log('not found prev <input type=hidden/>')
-      return
+
+    try {
+      const list = await getBackendSrv().get('/api/datasources');
+      uid = list?.find?.((ds: any) => ds.type === 'victoriametrics-logs-datasource')?.uid;
+      if (uid) {
+        setDatasourceUid(uid);
+        return uid;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('resolveDatasourceUid: failed to list datasources', err);
     }
-    //console.log(hiddenInput);
-    const op = select_dom.options[select_dom.selectedIndex].value;
-    switch (op){
-      case '=':
-      case '!=':
-          //
-          console.log(hiddenInput.value);
-          break;
+
+    return null;
+  };
+
+  const streamFieldOnValueInputChange = async (
+    source: HTMLElement | null,
+    val: string | undefined | null,
+    operator?: string,
+    streamField?: string
+  ) => {
+    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    // if (textarea) {
+    //   const text = `${streamField ?? ''} ${operator ?? ''} ${val ?? ''}`.trim();
+    //   textarea.value = text;
+    // }
+
+    if (!streamField) {
+      return;
+    }
+
+    const uid = await resolveDatasourceUid();
+    if (!uid) {
+      // eslint-disable-next-line no-console
+      console.error('stream_field_names: datasource uid not found for input change');
+      return;
+    }
+
+    const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`;
+    const payload = {
+      field: streamField,
+      query: `${streamField}:~\".*${val}.*\"`,
+      limit: '50',
+      start: '',
+      end: '',
+    };
+
+    try {
+      const resp = await getBackendSrv().post(path, payload);
+      if (textarea) {
+        textarea.value = JSON.stringify(resp);
+      }
+
+      // eslint-disable-next-line no-console
+      console.log('stream_field_values input from', source, resp);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('stream_field_names input change error', err);
     }
   };
 
+  const on_operator_change = async (selectEl: HTMLSelectElement, valueCell?: HTMLElement | null) => {
+    // eslint-disable-next-line no-console
+    const value = selectEl.value;
+    console.log('onchange select', value);
+    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    if (textarea) {
+      textarea.value = value;
+    }
+    let jsonData: any;
+    try {
+      jsonData = JSON.parse(value);
+    } catch {
+      return;
+    }
+
+    const operator = jsonData?.operator;
+    const streamField = jsonData?.stream_field ?? jsonData?.stream_feild;
+
+    if (!streamField || !(operator === '=' || operator === '!=')) {
+      return;
+    }
+
+    const targetCell = valueCell ?? (selectEl.parentElement?.nextElementSibling as HTMLElement | null);
+    if (!targetCell) {
+      return;
+    }
+
+    while (targetCell.firstChild) {
+      targetCell.removeChild(targetCell.firstChild);
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.dataset.streamValueSelect = 'true';
+    targetCell.appendChild(wrapper);
+
+    const renderValueSelect = (opts: Option[], placeholder?: string, operatorParam?: string, streamFieldParam?: string) => {
+      const root = createRoot(wrapper);
+      const selectId = streamFieldParam ? `stream-value-${streamFieldParam}` : 'stream-value-select';
+      root.render(
+        <ValueSelect
+          options={opts}
+          operator={operatorParam}
+          streamField={streamFieldParam}
+          selectId={selectId}
+          onInput={inputValue => streamFieldOnValueInputChange(wrapper, inputValue, operatorParam, streamFieldParam)}
+        />
+      );
+    };
+
+    renderValueSelect([], 'loading...', operator, streamField);
+
+    const uid = await resolveDatasourceUid();
+    if (!uid) {
+      // eslint-disable-next-line no-console
+      console.error('stream_field_values: datasource uid not found');
+      return;
+    }
+
+    const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`;
+    const payload = {
+      field: streamField,
+      query: '*',
+      start: '',
+      end: '',
+      limit: '50',
+    };
+
+    getBackendSrv()
+      .post(path, payload)
+      .then(resp => {
+        const options =
+          Array.isArray(resp?.values) && resp.values.length
+            ? resp.values.map((item: any) => ({ label: item?.value ?? '', value: item?.value ?? '' }))
+            : [];
+        renderValueSelect(options, undefined, operator, streamField);
+      })
+      .catch(err => {
+        // eslint-disable-next-line no-console
+        console.error('stream_field_values error', err);
+      });
+  };
+
+  const each_stream_feild = (stream_field_name: string, hits: number) => {
+    // eslint-disable-next-line no-console
+    console.log('each_stream_feild', stream_field_name, hits);
+    const tbody = document.getElementById('stream_filter_tbody') as HTMLTableSectionElement | null;
+    if (!tbody) {
+      return;
+    }
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.style.width="220px"
+    nameTd.innerHTML = `
+      <span style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:220px;text-align:right;" title="hits:${hits}">
+        ${stream_field_name ?? ''}:
+      </span>`;
+
+    const operatorTd = document.createElement('td');
+    const valueTd = document.createElement('td');
+    const select = document.createElement('select');
+    select.style.height = '32px';
+    select.style.padding = '4px 8px';
+    select.style.marginRight = '8px';
+    [
+      { value: '', label: 'empty' },
+      { value: '=', label: '= (equal)' },
+      { value: '!=', label: '!= (not equal)' },
+      { value: '=~', label: '=~ (regexp match)' },
+      { value: '!~', label: '!~ (not match)' },
+    ].forEach(opt => {
+      const optionEl = document.createElement('option');
+      optionEl.value = JSON.stringify({ stream_feild: stream_field_name, operator: opt.value });
+      optionEl.text = opt.label;
+      select.appendChild(optionEl);
+    });
+    select.addEventListener('change', () => on_operator_change(select, valueTd));
+    operatorTd.appendChild(select);
+
+    tr.appendChild(nameTd);
+    tr.appendChild(operatorTd);
+    tr.appendChild(valueTd);
+    tbody.appendChild(tr);
+  };
+
+  // stream_field_names
   const on_stream_field_names_response = (resp: any) => {
     const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
     if (textarea) {
       textarea.value = JSON.stringify(resp, null, 2);
     }
-    const container = document.getElementById('stream_filter_container');
-    if (!container) {
-      console.log('not found stream_filter_container');
+    const tbody = document.getElementById('stream_filter_tbody');
+    if (!tbody) {
+      console.log('not found stream_filter_tbody');
       return;
     }
+    tbody.innerHTML = '';
     if (Array.isArray(resp?.values)) {
       resp.values.forEach((item: any) => {
-        // eslint-disable-next-line no-console
-        console.log(item?.value, item?.hits);
-        const wrapper = document.createElement('div');
-
-        const valueText = document.createElement('span');
-        valueText.innerHTML = `${item?.value ?? ''} `;
-
-        const hiddenValue = document.createElement('input');
-        hiddenValue.type = 'hidden';
-        hiddenValue.value = item?.value ?? '';
-
-        const hitsText = document.createElement('span');
-        hitsText.style.color = 'gray';
-        hitsText.textContent = `(hits: ${item?.hits ?? ''})`;
-
-        const select = document.createElement('select');
-        select.style.height = '32px';
-        select.style.padding = '4px 8px';
-        select.style.marginRight = '8px';
-        select.dataset.operatorSelect = 'true';
-
-        const options = [
-          { value: '', label: '' },
-          { value: '=', label: '= (equal)' },
-          { value: '!=', label: '!= (not equal)' },
-          { value: '=~', label: '=~ (regexp match)' },
-          { value: '!~', label: '!~ (not match)' },
-        ];
-
-        options.forEach(opt => {
-          const optionEl = document.createElement('option');
-          optionEl.value = opt.value;
-          optionEl.text = opt.label;
-          select.appendChild(optionEl);
-        });
-
-        const br = document.createElement('br');
-
-        wrapper.appendChild(valueText);
-        wrapper.appendChild(hiddenValue);
-        wrapper.appendChild(hitsText);
-        wrapper.appendChild(select);
-        wrapper.appendChild(br);
-
-        container.prepend(wrapper);
+        each_stream_feild(item?.value, item?.hits);
       });
     }
   };
@@ -111,46 +273,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     window.alert('1');
   };
 
-  useEffect(() => {
-    (window as any).on_operator_change = on_operator_change;
-    return () => {
-      delete (window as any).on_operator_change;
-    };
-  }, []);
-
-  useEffect(() => {
-    const handler = (event: Event) => {
-      const target = event.target as HTMLElement | null;
-      if (target && target.tagName === 'SELECT' && (target as HTMLSelectElement).dataset.operatorSelect === 'true') {
-        on_operator_change(target as HTMLSelectElement);
-      }
-    };
-
-    const container = document.getElementById('stream_filter_container');
-    container?.addEventListener('change', handler, true);
-
-    return () => {
-      container?.removeEventListener('change', handler, true);
-    };
-  }, []);
 
   useEffect(() => {
     const fetchFields = async () => {
-      let uid =
-        data?.request?.request?.targets?.[0]?.datasource?.uid ??
-        data?.request?.targets?.[0]?.datasource?.uid ??
-        (window as any)?.__grafanaSceneContext?.meta?.data?.request?.targets?.[0]?.datasource?.uid ??
-        (window as any)?.__grafana_data?.request?.targets?.[0]?.datasource?.uid;
-
-      if (!uid) {
-        try {
-          const list = await getBackendSrv().get('/api/datasources');
-          uid = list?.find?.((ds: any) => ds.type === 'victoriametrics-logs-datasource')?.uid;
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.error('stream_field_names: failed to list datasources', err);
-        }
-      }
+      const uid = await resolveDatasourceUid();
 
       if (!uid) {
         // eslint-disable-next-line no-console
@@ -169,7 +295,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         //end: String(end*1000),
         start: '',
         end: '',
-        limit: String(50),
+        limit: String(100),
       };
 
       try {
@@ -182,89 +308,28 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         console.error('stream_field_names error', err);
       }
     };
-
+    // 调用异步函数
     fetchFields();
   }, [data, timeRange]);
 
-  const onChange = (index: number, key: 'name' | 'operator' | 'value', newValue: string) => {
-    setStreamFilters(prev => prev.map((item, i) => (i === index ? { ...item, [key]: newValue } : item)));
-  };
 
   return (
     <div style={{ height, padding: '16px', overflow: 'auto' }}>
       <table style={{ borderCollapse: 'collapse', width: '100%' }} border={0}>
         <tbody>
           <tr>
-            <td rowSpan={2} style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }}>
+            <td rowSpan={2} style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }} width="100">
               stream filter
             </td>
             <td id="stream_filter_container" style={{ paddingBottom: '8px' }}>
-              <select
-                name="stream_field_1_name"
-                value={streamFilters[0].name}
-                onChange={e => onChange(0, 'name', e.currentTarget.value)}
-                style={{ ...controlStyle, marginRight: '8px' }}
-              >
-                {fieldOptions.map(option => (
-                  <option key={`stream-1-name-${option}`} value={option}>
-                    {option || 'select field'}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="stream_field_1_operator"
-                value={streamFilters[0].operator}
-                onChange={e => onChange(0, 'operator', e.currentTarget.value)}
-                style={{ ...controlStyle, marginRight: '8px' }}
-              >
-                {operatorOptions.map(option => (
-                  <option key={`stream-1-operator-${option}`} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                name="stream_field_1_value"
-                value={streamFilters[0].value}
-                onChange={e => onChange(0, 'value', e.currentTarget.value)}
-                style={controlStyle}
-              />
+              <table style={{ width: '500' }}>
+                <tbody id="stream_filter_tbody"></tbody>
+              </table>
             </td>
           </tr>
           <tr>
             <td style={{ paddingBottom: '8px' }}>
-              <select
-                name="stream_field_2_name"
-                value={streamFilters[1].name}
-                onChange={e => onChange(1, 'name', e.currentTarget.value)}
-                style={{ ...controlStyle, marginRight: '8px' }}
-              >
-                {fieldOptions.map(option => (
-                  <option key={`stream-2-name-${option}`} value={option}>
-                    {option || 'select field'}
-                  </option>
-                ))}
-              </select>
-              <select
-                name="stream_field_2_operator"
-                value={streamFilters[1].operator}
-                onChange={e => onChange(1, 'operator', e.currentTarget.value)}
-                style={{ ...controlStyle, marginRight: '8px' }}
-              >
-                {operatorOptions.map(option => (
-                  <option key={`stream-2-operator-${option}`} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                name="stream_field_2_value"
-                value={streamFilters[1].value}
-                onChange={e => onChange(1, 'value', e.currentTarget.value)}
-                style={controlStyle}
-              />
+              todo
             </td>
           </tr>
           <tr>
