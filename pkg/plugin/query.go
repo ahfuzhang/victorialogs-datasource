@@ -91,6 +91,7 @@ func (q *Query) getQueryURL(rawURL string, queryParams string) (string, error) {
 		}
 		return q.statsQueryRangeURL(params, minInterval), nil
 	case QueryTypeHits:
+		// hits 查询
 		minInterval, err := q.calculateMinInterval()
 		if err != nil {
 			return "", fmt.Errorf("failed to calculate minimal interval: %w", err)
@@ -232,6 +233,7 @@ func (q *Query) statsQueryRangeURL(queryParams url.Values, minInterval time.Dura
 }
 
 // histQueryURL prepare query url for querying log hits
+// 构造 hits 的查询参数
 func (q *Query) histQueryURL(queryParams url.Values, minInterval time.Duration) string {
 	q.url.Path = path.Join(q.url.Path, hitsQueryPath)
 	values := q.url.Query()

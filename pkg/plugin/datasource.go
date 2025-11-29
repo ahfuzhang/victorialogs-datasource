@@ -281,6 +281,7 @@ func (di *DatasourceInstance) Dispose() {
 // req contains the queries []DataQuery (where each query contains RefID as a unique identifier).
 // The QueryDataResponse contains a map of RefID to the response for each query, and each response
 // contains Frames ([]*Frame).
+// 调用 query.  看起来是实现 grafana 的标准接口
 func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
 	response := backend.NewQueryDataResponse()
 	headers := req.Headers
@@ -298,10 +299,12 @@ func (d *Datasource) QueryData(ctx context.Context, req *backend.QueryDataReques
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	for _, q := range req.Queries {
+		// 解析查询参数
 		rawQuery, err := getQueryFromRaw(q.JSON, forAlerting)
 		if err != nil {
 			return nil, err
 		}
+		// ??? 看不懂
 		rawQuery.DataQuery = q
 
 		wg.Add(1)
@@ -361,6 +364,7 @@ func getQueryFromRaw(data json.RawMessage, forAlerting bool) (*Query, error) {
 }
 
 // datasourceQuery process the query to the datasource and returns the result.
+// 对数据源调用 query 接口
 func (di *DatasourceInstance) datasourceQuery(ctx context.Context, q *Query, isStream bool) (io.ReadCloser, error) {
 	reqURL, err := q.getQueryURL(di.settings.URL, di.grafanaSettings.QueryParams)
 	if err != nil {
@@ -426,6 +430,7 @@ func (di *DatasourceInstance) datasourceQuery(ctx context.Context, q *Query, isS
 }
 
 // query sends a query to the datasource and returns the result.
+// 调用 query 或者 hits
 func (di *DatasourceInstance) query(ctx context.Context, q *Query) backend.DataResponse {
 	r, err := di.datasourceQuery(ctx, q, false)
 	if err != nil {
