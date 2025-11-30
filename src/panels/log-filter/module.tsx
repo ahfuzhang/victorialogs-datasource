@@ -11,12 +11,6 @@ interface LogFilterOptions {
 
 type Option = { label: string; value: string };
 type Filter = { operator: string; value: string };
-type PanelContext = { 
-  streamFilters: React.MutableRefObject<Record<string, Filter>>; 
-  fieldFilters: React.MutableRefObject<Record<string, Filter>>; 
-  messageFilter: React.MutableRefObject<Record<string, Filter>>; 
-  timeRangeRef?: React.MutableRefObject<TimeRange | undefined>;
-};
 
 type StringBuilder = {
   append: (text: string) => StringBuilder;
@@ -40,134 +34,147 @@ const createStringBuilder = (initial = ''): StringBuilder => {
   };
 };
 
-const ValueSelect: React.FC<{
-  options: Option[];
-  operator?: string;
-  streamField?: string;
-  selectId: string;
-  placeholder?: string;
-  onInput?: (val: string | undefined | null) => void | Promise<void>;
-  panelCtx: PanelContext;
-}> = ({ options, operator, streamField, selectId, placeholder, onInput, panelCtx }) => {
-  const [localOptions, setLocalOptions] = useState<Option[]>(options);
-  useEffect(() => {
-    setLocalOptions(options);
-  }, [options]);
-
-  return (
-    <Select
-      width={40}
-      allowCustomValue
-      inputId={selectId}
-      name={selectId}
-      placeholder={placeholder ?? 'type or select'}
-      options={localOptions}
-      onChange={v => {
-        getFieldsByStreamFields(panelCtx, streamField, operator, v.value);
-      }}
-      onInputChange={(inputValue, actionMeta: any) => {
-        if (actionMeta?.action === 'input-change') {
-          onInput?.(inputValue);
-        }
-      }}
-    />
-  );
+const sysFields: Record<string, null> = {
+  _msg: null,
+  _stream: null,
+  _stream_id: null,
+  _time: null,
 };
-
-const getFieldsByStreamFields = (
-  panelCtx: PanelContext,
-  streamField?: string,
-  operator?: string,
-  value?: string | null
-) => {
-  const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-  if (textarea) {
-    const text = `${streamField ?? ''} ${operator ?? ''} ${value ?? ''}`.trim();
-    textarea.value = text;
-  }
-  const m = panelCtx?.streamFilters?.current;
-  if (m && streamField) {
-    // 记录下修改后的 stream filter
-    m[streamField] = { operator: operator ?? '', value: value ?? '' };
-    //
-    generateLogsQL(panelCtx);
-  }
-};
-
-const generateLogsQL = (panelCtx: PanelContext) => {
-  const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
-  if (!logsql){
-    return;
-  }
-  let sb = createStringBuilder()
-  
-  const startStr = panelCtx.timeRangeRef?.current?.from?.toISOString();
-  const endStr = panelCtx.timeRangeRef?.current?.to?.toISOString();
-  if (startStr && endStr) {
-    sb.append('_time:[')
-    sb.append(startStr);
-    sb.append(', ');
-    sb.append(endStr);
-    sb.append('] ')
-  }
-  let m = panelCtx.streamFilters.current
-  if (Object.keys(m).length>0){
-    sb.append('{')
-    let isFirst = true
-    for (let k in m) {
-      if (isFirst){
-        isFirst = false
-      } else {
-        sb.append(',')
-      }
-      sb.append(k)
-      sb.append(m[k].operator)
-      sb.append(JSON.stringify(m[k].value ?? ''))
-    }
-    sb.append('} ')
-  }
-  if ('_msg' in panelCtx.messageFilter.current){
-    let v = panelCtx.messageFilter.current['_msg']
-    if (v.operator.length>0 && v.value.length>0){
-      sb.append('_msg')
-      sb.append(v.operator)
-      sb.append(JSON.stringify(v.value ?? ''))
-      sb.append(' ')
-    }
-  }
-  
-  logsql.value = sb.toString();
-}
 
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data }) => {
   const [demoOption, setDemoOption] = useState<string | null>(null);
-  const [fieldSelectorValue, setFieldSelectorValue] = useState<string | null>(null);
+  const [fieldSelectorDynamicValue, setFieldSelectorDynamicValue] = useState<string | null>(null);
+  const [fieldSelectorDynamicOptions, setFieldSelectorDynamicOptions] = useState<Option[]>([]);
+  const [fieldOperatorDynamicValue, setFieldOperatorDynamicValue] = useState<string | null>(null);
+  const [fieldOperatorDynamicOptions] = useState<Option[]>([]);
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
+  const [filterByStreamFields, setFilterByStreamFields] = useState<boolean>(true);
   const timeRangeRef = useRef<TimeRange | undefined>(timeRange);
   const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
   const streamFieldMapRef = useRef<Record<string, null>>({});
   const fieldMapRef = useRef<Record<string, any>>({});
+  const fieldsLastTimeRef = useRef<Record<string, null>>({});
   const streamFiltersRef = useRef<Record<string, Filter>>({});
-  const fieldFiltersRef = useRef<Record<string, Filter>>({});
   const msgFiltersRef = useRef<Record<string, Filter>>({});
+
+  // 根据几个全局的 map, 生成 logsQL 语句
+  const generateLogsQL = () => {
+    const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
+    if (!logsql) {
+      return;
+    }
+    const sb = createStringBuilder();
+    const startStr = timeRangeRef.current?.from?.toISOString();
+    const endStr = timeRangeRef.current?.to?.toISOString();
+    if (startStr && endStr) {
+      sb.append('_time:[');
+      sb.append(startStr);
+      sb.append(', ');
+      sb.append(endStr);
+      sb.append('] ');
+    }
+    const streamFilters = streamFiltersRef.current;
+    if (Object.keys(streamFilters).length > 0) {
+      sb.append('{');
+      let isFirst = true;
+      for (const k in streamFilters) {
+        if (isFirst) {
+          isFirst = false;
+        } else {
+          sb.append(',');
+        }
+        sb.append(k);
+        sb.append(streamFilters[k].operator);
+        sb.append(JSON.stringify(streamFilters[k].value ?? ''));
+      }
+      sb.append('} ');
+    }
+    if ('_msg' in msgFiltersRef.current) {
+      const v = msgFiltersRef.current['_msg'];
+      if (v.operator.length > 0 && v.value.length > 0) {
+        sb.append('_msg');
+        sb.append(v.operator);
+        sb.append(JSON.stringify(v.value ?? ''));
+        sb.append(' ');
+      }
+    }
+    logsql.value = sb.toString();
+  };
+  const getFieldsByStreamFields = (streamField?: string, operator?: string, value?: string | null) => {
+    // const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    // if (textarea) {
+    //   const text = `${streamField ?? ''} ${operator ?? ''} ${value ?? ''}`.trim();
+    //   textarea.value = text;
+    // }
+    const m = streamFiltersRef.current;
+    if (m && streamField) {
+      // 记录下修改后的 stream filter
+      m[streamField] = { operator: operator ?? '', value: value ?? '' };
+      generateLogsQL();
+      loadFieldNamesByStreamFields();
+    }
+  };
+
+  // 猜测是定义了一个控件
+  const ValueSelect: React.FC<{
+    options: Option[];
+    operator?: string;
+    streamField?: string;
+    selectId: string;
+    placeholder?: string;
+    onInput?: (val: string | undefined | null) => void | Promise<void>;
+  }> = ({ options, operator, streamField, selectId, placeholder, onInput }) => {
+    const [localOptions, setLocalOptions] = useState<Option[]>(options);
+    useEffect(() => {
+      setLocalOptions(options);
+    }, [options]);
+
+    return (
+      <Select
+        width={40}
+        allowCustomValue
+        inputId={selectId}
+        name={selectId}
+        placeholder={placeholder ?? 'type or select'}
+        options={localOptions}
+        onChange={(v) => {
+          getFieldsByStreamFields(streamField, operator, v.value);
+        }}
+        onInputChange={(inputValue, actionMeta: any) => {
+          if (actionMeta?.action === 'input-change') {
+            onInput?.(inputValue);
+          }
+        }}
+      />
+    );
+  };
+
+  // 选择的时间范围变更的时候，响应这个事件
   const onTimeRangeChange = (tr?: TimeRange) => {
     // const startStr = tr?.from?.toISOString();
     // const endStr = tr?.to?.toISOString();
     // // placeholder: react to time range change without resetting form state
     // console.info('time range changed', startStr, endStr);
-    generateLogsQL({
-      streamFilters: streamFiltersRef,
-      fieldFilters: fieldFiltersRef,
-      messageFilter: msgFiltersRef,
-      timeRangeRef,
-    });
+    generateLogsQL();
   };
 
-  // 选择的字段发生变化的时候，调整出现的 operator
-  const onFieldSelectorChange = (tr: HTMLTableRowElement, value?: string | null) => {
-    setFieldSelectorValue(value ?? null);
-    // 先拉取 n 条数据猜测一下数据类型
-    // http://127.0.0.1:9429/select/logsql/field_values?query=*&field=Properties.Code&start=1d&limit=100
+  const onDynamicFieldSelectChange = (value?: string | null) => {
+    setFieldSelectorDynamicValue(value ?? null);
+  };
+
+  const onDynamicFieldOperatorChange = (value?: string | null) => {
+    setFieldOperatorDynamicValue(value ?? null);
+  };
+
+  const onFilterByStreamFieldsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setFilterByStreamFields(event.currentTarget.checked);
+    // if (!event.currentTarget.checked){
+    //   const opts: Option[] = Object.keys(fieldsLastTimeRef.current).map((k: string) => ({ label: k, value: k }));
+    //   setFieldSelectorDynamicOptions(opts);
+    //   setFieldSelectorDynamicValue(null);
+    //   return;
+    // }
+    loadFieldNamesByStreamFields();
   };
 
   const onFieldOperatorChange = (value?: string | null) => {
@@ -178,12 +185,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       m['_msg'] = { operator: op, value: '' };
     }
-    generateLogsQL({
-      streamFilters: streamFiltersRef,
-      fieldFilters: fieldFiltersRef,
-      messageFilter: msgFiltersRef,
-      timeRangeRef,
-    });
+    generateLogsQL();
   };
 
   const onFieldValueBlur = (val: string) => {
@@ -193,12 +195,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       m['_msg'] = { operator: ':~', value: val ?? '' };
     }
-    generateLogsQL({
-      streamFilters: streamFiltersRef,
-      fieldFilters: fieldFiltersRef,
-      messageFilter: msgFiltersRef,
-      timeRangeRef,
-    });
+    generateLogsQL();
   };
 
   const onLogsqlCopy = () => {
@@ -241,18 +238,18 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           // maxDataPoints: 0,
         },
       ],
-      from: String(startTs),  // 单位确实是毫秒
+      from: String(startTs), // 单位确实是毫秒
       to: String(endTs),
     };
 
     getBackendSrv()
       .post(`/api/ds/query?ds_type=victoriametrics-logs-datasource&requestId=logsql_test`, body)
-      .then(resp => {
+      .then((resp) => {
         if (respTextarea) {
           respTextarea.value = JSON.stringify(resp, null, 2);
         }
       })
-      .catch(err => {
+      .catch((err) => {
         if (respTextarea) {
           respTextarea.value = String(err);
         }
@@ -260,16 +257,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   // 当输入正则表达式变化时
-  const onStreamFieldValueBlur = (streamField:string, operator:string, val: string) => {
+  const onStreamFieldValueBlur = async (streamField: string, operator: string, val: string) => {
     const m = streamFiltersRef.current;
     if (streamField) {
       m[streamField] = { operator: operator ?? '', value: val ?? '' };
-      generateLogsQL({ 
-        streamFilters: streamFiltersRef, 
-        fieldFilters: fieldFiltersRef,
-        messageFilter: msgFiltersRef,
-        timeRangeRef,
-      });
+      generateLogsQL();
+      await loadFieldNamesByStreamFields();
     }
     // const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
     // if (textarea) {
@@ -277,6 +270,80 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // }
   };
 
+  const loadFieldNamesByStreamFields = async () => {
+    //const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    const uid = await resolveDatasourceUid();
+    if (!uid) {
+      // eslint-disable-next-line no-console
+      console.error('loadFFieldNamesByStreamFields: datasource uid not found');
+      return;
+    }
+    const chkUseStreamFilter = document.getElementById('chkUseStreamFilter') as HTMLInputElement | null;
+    const useStreamFilter = chkUseStreamFilter?.checked ?? false;
+    if (!useStreamFilter) {
+      const opts: Option[] = Object.keys(fieldsLastTimeRef.current)
+        .sort()
+        .map((k: string) => ({ label: k, value: k }));
+      setFieldSelectorDynamicOptions(opts);
+      setFieldSelectorDynamicValue(null);
+      return;
+    }
+    try {
+      const operatorMap: Record<string, string> = {
+        '=': ':xxx',
+        '!=': ':!xxx',
+        '=~': ':~xxx',
+        '!~': ':!~xxx',
+      };
+      const filters = streamFiltersRef.current;
+      const expressions: string[] = [];
+
+      if (Object.keys(filters).length === 0) {
+        expressions.push('*');
+      } else {
+        Object.keys(filters).forEach((key) => {
+          const op = filters[key]?.operator ?? '';
+          const val = filters[key]?.value ?? '';
+          const mapped = operatorMap[op] ?? op;
+          if (mapped.includes('xxx')) {
+            expressions.push(`${key}${mapped.replace('xxx', JSON.stringify(val ?? ''))}`);
+          } else {
+            expressions.push(`${key}${mapped}${val}`);
+          }
+        });
+      }
+      const queryExpr = expressions.join(',');
+      const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
+        query: queryExpr,
+        start: '',
+        end: '',
+        limit: '50',
+      });
+      // if (textarea) {
+      //   textarea.value = JSON.stringify(resp, null, 2);
+      // }
+      const keys = Array.isArray(resp?.values)
+        ? resp.values
+            .map((item: any) => item?.value ?? '')
+            .filter((k: string) => k !== ''&&!(k in sysFields)&&!(k in streamFieldMapRef.current))
+            .sort()
+        : [];
+      //  && !(k in streamFieldMapRef.current)  
+      //  && !(k in sysFields)
+      // todo: 这里应该过滤掉系统字段
+      const opts: Option[] = keys.map((k: string) => ({ label: k, value: k }));
+      setFieldSelectorDynamicOptions(opts);
+      setFieldSelectorDynamicValue(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('loadFFieldNamesByStreamFields error', err);
+      // if (textarea) {
+      //   textarea.value = String(err);
+      // }
+    }
+  };
+
+  // 查询当前的数据源 id
   const resolveDatasourceUid = async (): Promise<string | null> => {
     const targets = (data as any)?.request?.targets;
     let uid =
@@ -326,13 +393,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         streamField={streamField}
         selectId={selectId}
         placeholder={placeholder}
-        onInput={inputValue => streamFieldOnValueInputChange(wrapper, inputValue, operator, streamField)}
-        panelCtx={{ 
-          streamFilters: streamFiltersRef, 
-          fieldFilters: fieldMapRef,
-          messageFilter: msgFiltersRef,
-          timeRangeRef,
-         }}
+        onInput={(inputValue) => streamFieldOnValueInputChange(wrapper, inputValue, operator, streamField)}
       />
     );
   };
@@ -378,10 +439,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       if (source && source instanceof HTMLElement) {
         const options =
           Array.isArray(resp?.values) && resp.values.length
-            ? resp.values.map((item: any) => ({ 
-              label: ('(' + String(item.hits) + ')' + item?.value), 
-              value: item?.value 
-            }))
+            ? resp.values.map((item: any) => ({
+                label: '(' + String(item.hits) + ')' + item?.value,
+                value: item?.value,
+              }))
             : [];
         renderValueSelectForWrapper(source, options, operator, streamField);
         if (textarea) {
@@ -425,14 +486,17 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         while (targetCell.firstChild) {
           targetCell.removeChild(targetCell.firstChild);
         }
-        return;
+        if (streamField) {
+          delete streamFiltersRef.current[streamField];
+        }
+        break;
       case '=':
       case '!=':
         if (!streamField) {
           return;
         }
         await showStreamFieldValueSelector(targetCell, operator, streamField);
-        return;
+        break;
       case '=~':
       case '!~':
         while (targetCell.firstChild) {
@@ -445,24 +509,21 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
               type="text"
               style={{ width: '400px', height: '32px', padding: '4px 8px' }}
               placeholder="enter value"
-              onBlur={e => {
+              onBlur={(e) => {
                 onStreamFieldValueBlur(streamField, operator, e.currentTarget.value);
               }}
             />
           );
         }
-        return;
+        break;
       default:
-        alert("not support operator:" + operator);
-        return;
+        alert('not support operator:' + operator);
+        break;
     }
+    loadFieldNamesByStreamFields();
   };
 
-  const showStreamFieldValueSelector = async (
-    targetCell: HTMLElement,
-    operator?: string,
-    streamField?: string
-  ) => {
+  const showStreamFieldValueSelector = async (targetCell: HTMLElement, operator?: string, streamField?: string) => {
     while (targetCell.firstChild) {
       targetCell.removeChild(targetCell.firstChild);
     }
@@ -481,13 +542,16 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
 
     try {
-      const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`, {
-        field: streamField,
-        query: '*',
-        start: '',
-        end: '',
-        limit: '50',
-      });
+      const resp = await getBackendSrv().post(
+        `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`,
+        {
+          field: streamField,
+          query: '*',
+          start: '',
+          end: '',
+          limit: '50',
+        }
+      );
       const options =
         Array.isArray(resp?.values) && resp.values.length
           ? resp.values.map((item: any) => ({ label: item?.value ?? '', value: item?.value ?? '' }))
@@ -509,7 +573,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const tr = document.createElement('tr');
 
     const nameTd = document.createElement('td');
-    nameTd.style.width="220px"
+    nameTd.style.width = '220px';
     nameTd.innerHTML = `
       <span style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:220px;text-align:right;" title="hits:${hits}">
         ${stream_field_name ?? ''}:
@@ -528,7 +592,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       { value: '!=', label: '!= (not equal)' },
       { value: '=~', label: '=~ (regexp match)' },
       { value: '!~', label: '!~ (not match)' },
-    ].forEach(opt => {
+    ].forEach((opt) => {
       const optionEl = document.createElement('option');
       optionEl.value = JSON.stringify({ stream_feild: stream_field_name, operator: opt.value });
       optionEl.text = opt.label;
@@ -565,7 +629,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const onClick = () => {
     window.alert('1');
   };
-
 
   // run once on mount; avoid re-running/clearing form state on time range change
   useEffect(() => {
@@ -604,7 +667,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     };
 
     // 拉取普通的 field 的 name
-    const fetchFields = async (streamFields: any) =>{
+    const fetchFields = async (streamFields: any) => {
       //alert(2);
       console.info('stream_field_names:', streamFields);
       const uid = await resolveDatasourceUid();
@@ -625,13 +688,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         handleFieldNamesResponse(streamFields, resp);
       } catch (err) {
         // eslint-disable-next-line no-console
-       //alert(4);
+        //alert(4);
         console.error('field_names error', err);
       }
     };
 
     fetchSreamFields();
-    
   }, []);
 
   // keep latest timeRange in ref without resetting UI state
@@ -643,7 +705,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const handleFieldNamesResponse = (streamFields: any, resp: any) => {
     //alert(5);
     const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    if (!textarea){
+    if (!textarea) {
       return;
     }
     textarea.value += '\n\n' + JSON.stringify(resp);
@@ -660,12 +722,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     streamFieldMapRef.current = streamFieldMap;
     textarea.value += '\n\n' + JSON.stringify(streamFieldMap);
     //
-    const sysFields: Record<string, null> = {
-      _msg: null,
-      _stream: null,
-      _stream_id: null,
-      _time: null,
-    };
+
     const fieldMap: Record<string, null> = {};
     if (Array.isArray(resp?.values)) {
       resp.values.forEach((item: any) => {
@@ -680,6 +737,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           return;
         }
         fieldMap[key] = null;
+        fieldsLastTimeRef.current[key] = null; // 记录第一次读到的字段，减少后续的加载
       });
     }
     fieldMapRef.current = fieldMap;
@@ -687,90 +745,15 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // if (textarea) {
     //   textarea.value = JSON.stringify(fieldMap);
     // }
-    showFieldSelector()
+    showFieldSelector();
   };
 
   // 展示 field 的选择框
   const showFieldSelector = () => {
-    const tbody = document.getElementById('field_filter_tbody') as HTMLTableSectionElement | null;
-    if (!tbody) {
-      return;
-    }
-
-    while (tbody.firstChild) {
-      tbody.removeChild(tbody.firstChild);
-    }
-
-    const tr = document.createElement('tr');
-    const td1 = document.createElement('td');
-
-    const radioGroup = document.createElement('div');
-    const radioAllId = 'field-selector-scope-all';
-    const radioFilterId = 'field-selector-scope-filter';
-    const radioAll = document.createElement('input');
-    radioAll.type = 'radio';
-    radioAll.name = 'field-selector-scope';
-    radioAll.id = radioAllId;
-    radioAll.value = 'all';
-    const radioAllLabel = document.createElement('label');
-    radioAllLabel.htmlFor = radioAllId;
-    radioAllLabel.textContent = 'all';
-    radioGroup.appendChild(radioAll);
-    radioGroup.appendChild(radioAllLabel);
-
-    const radioFilter = document.createElement('input');
-    radioFilter.type = 'radio';
-    radioFilter.name = 'field-selector-scope';
-    radioFilter.id = radioFilterId;
-    radioFilter.value = 'filter';
-    radioFilter.checked = true;
-    const radioFilterLabel = document.createElement('label');
-    radioFilterLabel.htmlFor = radioFilterId;
-    radioFilterLabel.textContent = 'filter by stream fields';
-    radioGroup.appendChild(radioFilter);
-    radioGroup.appendChild(radioFilterLabel);
-
-    td1.appendChild(radioGroup);
-    td1.appendChild(document.createElement('br'));
-    //td1.textContent = 'field selector placeholder';
-    const selectMount = document.createElement('div');
-    td1.appendChild(selectMount);
     const keys = Object.keys(fieldMapRef.current ?? {}).sort();
-    const options: Option[] = keys.map(k => ({ label: k, value: k }));
-    const root = createRoot(selectMount);
-    root.render(
-      <Select
-        width={40}
-        placeholder="Select field"
-        options={options}
-        value={options.find(o => o.value === fieldSelectorValue)}
-        onChange={v => onFieldSelectorChange(tr, v.value ?? null)}
-        //panelCtx={{ fieldMapRef }}
-      />
-    );
-    tr.appendChild(td1);
-    
-    const td2 = document.createElement('td');
-    // const opSelect = document.createElement('select');
-    // opSelect.style.height = '32px';
-    // opSelect.style.padding = '4px 8px';
-    // opSelect.style.marginRight = '8px';
-    // [
-    //   { value: ':=', label: ':= (equal)' },
-    //   { value: '!=', label: '!= (not equal)' },
-    //   { value: ':~', label: ':~  (regexp match)' },
-    // ].forEach(opt => {
-    //   const option = document.createElement('option');
-    //   option.value = opt.value;
-    //   option.text = opt.label;
-    //   opSelect.appendChild(option);
-    // });
-    // td2.appendChild(opSelect);
-    tr.appendChild(td2);
-    const td3 = document.createElement('td');
-    td3.textContent = 'field selector placeholder';
-    tr.appendChild(td3);
-    tbody.appendChild(tr);
+    const opts: Option[] = keys.map((k) => ({ label: k, value: k }));
+    setFieldSelectorDynamicOptions(opts);
+    setFieldSelectorDynamicValue(null);
   };
 
   return (
@@ -778,123 +761,157 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       <table style={{ borderCollapse: 'collapse', width: '100%' }} border={0}>
         <tbody>
           <tr>
-          <td>
-
-
-      <table style={{ borderCollapse: 'collapse', width: '100%' }} border={1}>
-        <tbody>
-          <tr>
-            <td style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }} width="100">
-              stream fields:
-            </td>
-            <td id="stream_filter_container" style={{ paddingBottom: '8px' }}>
-              <table style={{ width: '500' }}>
-                <tbody id="stream_filter_tbody"></tbody>
+            <td>
+              <table style={{ borderCollapse: 'collapse', width: '100%' }} border={1}>
+                <tbody>
+                  <tr>
+                    <td style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }} width="100">
+                      stream fields:
+                    </td>
+                    <td id="stream_filter_container" style={{ paddingBottom: '8px' }}>
+                      <table style={{ width: '500' }}>
+                        <tbody id="stream_filter_tbody"></tbody>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields:</td>
+                    <td style={{ padding: '4px 0' }}>
+                      <table style={{ width: '500' }}>
+                        <tbody id="field_filter_tbody">
+                          <tr>
+                            <td colSpan={2}>
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={filterByStreamFields}
+                                  id="chkUseStreamFilter"
+                                  onChange={onFilterByStreamFieldsChange}
+                                />
+                                filter by stream fields
+                              </label>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td>
+                              <Select
+                                width={25}
+                                options={fieldSelectorDynamicOptions}
+                                allowCustomValue
+                                placeholder="Select field"
+                                id="selForFieldNames"
+                                value={fieldSelectorDynamicOptions.find((o) => o.value === fieldSelectorDynamicValue)}
+                                onChange={(v) => onDynamicFieldSelectChange(v.value)}
+                              />
+                            </td>
+                            <td>
+                              <Select
+                                width={25}
+                                options={fieldOperatorDynamicOptions}
+                                allowCustomValue={false}
+                                placeholder="Choose operator"
+                                value={fieldOperatorDynamicOptions.find((o) => o.value === fieldOperatorDynamicValue)}
+                                onChange={(v) => onDynamicFieldOperatorChange(v.value)}
+                              />
+                            </td>
+                            <td>
+                              <TextArea placeholder="input field value" />
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>message:</td>
+                    <td style={{ padding: '4px 0' }}>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
+                        <Select
+                          width={30}
+                          options={[
+                            { label: ':~ (regexp match)', value: ':~' },
+                            { label: ':!~ (not match)', value: ':!~' },
+                          ]}
+                          allowCustomValue={false}
+                          onChange={(v) => onFieldOperatorChange(v.value)}
+                          placeholder="op"
+                        />
+                        <input
+                          type="text"
+                          width={40}
+                          style={{ flex: 1, height: '32px', padding: '4px 8px' }}
+                          placeholder="enter value"
+                          onBlur={(e) => onFieldValueBlur(e.currentTarget.value)}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>Full text search:</td>
+                    <td style={{ padding: '4px 0' }}>
+                      <textarea></textarea>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>query options</td>
+                    <td style={{ padding: '4px 0' }}>empty</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>output options</td>
+                    <td style={{ padding: '4px 0' }}>empty</td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={{ textAlign: 'center', paddingTop: '12px' }}>
+                      <input type="button" value="Query" onClick={onClick} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={{ paddingTop: '8px' }}>
+                      <textarea id="response_data" style={{ width: '100%', height: '160px' }} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={{ paddingTop: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Select
+                          width={24}
+                          placeholder="Pick one"
+                          options={[
+                            { label: 'Alpha', value: 'alpha' },
+                            { label: 'Beta', value: 'beta' },
+                            { label: 'Gamma', value: 'gamma' },
+                            { label: 'Delta', value: 'delta' },
+                          ]}
+                          value={demoOption}
+                          onChange={(v) => setDemoOption(v.value ?? null)}
+                        />
+                        <span style={{ color: '#888' }}>Selected: {demoOption ?? '(none)'}</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
               </table>
             </td>
-          </tr>
-          <tr>
-            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields:</td>
-            <td style={{ padding: '4px 0' }}>
-              <table style={{ width: '500' }}>
-                <tbody id="field_filter_tbody"></tbody>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>message:</td>
-            <td style={{ padding: '4px 0' }}>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
-                <Select
-                  width={30}
-                  options={[
-                    { label: ':~ (regexp match)', value: ':~' },
-                    { label: ':!~ (not match)', value: ':!~' },
-                  ]}
-                  allowCustomValue={false}
-                  onChange={v => onFieldOperatorChange(v.value)}
-                  placeholder="op"
-                />
-                <input
-                  type="text"
-                  width={40}
-                  style={{ flex: 1, height: '32px', padding: '4px 8px' }}
-                  placeholder="enter value"
-                  onBlur={e => onFieldValueBlur(e.currentTarget.value)}
-                />
-              </div>
-            </td>
-          </tr>
-           <tr>
-            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>Full text searc:</td>
-            <td style={{ padding: '4px 0' }}>
-              <textarea>
-
-              </textarea>
-
-            </td>
-          </tr>
-           <tr>
-            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>query options</td>
-            <td style={{ padding: '4px 0' }}>empty</td>
-          </tr>
-          <tr>
-            <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>output options</td>
-            <td style={{ padding: '4px 0' }}>empty</td>
-          </tr>
-          <tr>
-            <td colSpan={2} style={{ textAlign: 'center', paddingTop: '12px' }}>
-              <input type="button" value="Query" onClick={onClick} />
-            </td>
-          </tr>
-          <tr>
-            <td colSpan={2} style={{ paddingTop: '8px' }}>
-              <textarea id="response_data" style={{ width: '100%', height: '160px' }} />
-            </td>
-          </tr>
-          <tr>
-            <td colSpan={2} style={{ paddingTop: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <Select
-                  width={24}
-                  placeholder="Pick one"
-                  options={[
-                    { label: 'Alpha', value: 'alpha' },
-                    { label: 'Beta', value: 'beta' },
-                    { label: 'Gamma', value: 'gamma' },
-                    { label: 'Delta', value: 'delta' },
-                  ]}
-                  value={demoOption}
-                  onChange={v => setDemoOption(v.value ?? null)}
-                />
-                <span style={{ color: '#888' }}>Selected: {demoOption ?? '(none)'}</span>
+            <td width="400" valign="top">
+              <TextArea
+                aria-label="LogSQL output"
+                rows={10}
+                placeholder="LogSQL preview"
+                defaultValue=""
+                style={{ width: '100%' }}
+                id="logsql"
+              />
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '12px' }}>
+                <button style={{ padding: '8px 16px' }} onClick={onLogsqlCopy}>
+                  Copy LogSQL
+                </button>
+                <button style={{ padding: '8px 16px', marginLeft: '12px' }} onClick={onLogsqlTest}>
+                  Test LogsQL
+                </button>
               </div>
             </td>
           </tr>
         </tbody>
-      </table>
-
-      </td>
-      <td width="400" valign="top">
-          <TextArea
-            aria-label="LogSQL output"
-            rows={10}
-            placeholder="LogSQL preview"
-            defaultValue=""
-            style={{ width: '100%' }}
-            id="logsql"
-          />
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: '12px' }}>
-            <button style={{ padding: '8px 16px' }} onClick={onLogsqlCopy}>
-              Copy LogSQL
-            </button>
-            <button style={{ padding: '8px 16px', marginLeft: '12px' }} onClick={onLogsqlTest}>
-              Test LogsQL
-            </button>
-          </div>
-      </td>
-      </tr>
-      </tbody>
       </table>
     </div>
   );
@@ -909,12 +926,12 @@ const YamlEditor: React.FC<StandardEditorProps<string, any, any>> = ({ value, on
       rows={rows}
       placeholder="Enter YAML configuration"
       value={value ?? ''}
-      onChange={event => onChange(event.currentTarget.value)}
+      onChange={(event) => onChange(event.currentTarget.value)}
     />
   );
 };
 
-export const plugin = new PanelPlugin<LogFilterOptions>(LogFilterPanel).setPanelOptions(builder =>
+export const plugin = new PanelPlugin<LogFilterOptions>(LogFilterPanel).setPanelOptions((builder) =>
   builder.addCustomEditor({
     id: 'yaml',
     path: 'yaml',
