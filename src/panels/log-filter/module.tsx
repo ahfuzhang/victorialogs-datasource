@@ -47,7 +47,29 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const [fieldSelectorDynamicOptions, setFieldSelectorDynamicOptions] = useState<Option[]>([]);
   const [fieldOperatorDynamicValue, setFieldOperatorDynamicValue] = useState<string | null>(null);
   const [fieldOperatorDynamicOptions] = useState<Option[]>([]);
+  const [fieldValueDynamic, setFieldValueDynamic] = useState<string>('');
+  const [testResult, setTestResult] = useState<string>('');
+  const [testError, setTestError] = useState<string>('');
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
+  const defaultFieldOperatorOptions: Option[] = [
+    { label: ':= (equal)', value: ':=xxx' },
+    { label: ':i() (equal, ignore case)', value: ':i(xxx)' },
+    { label: ':! (not equal)', value: ':!xxx' },
+    { label: ':~ (regexp match)', value: ':~xxx' },
+    { label: ':!~ (not match)', value: ':!~xxx' },
+    { label: ':xxx* (prefix)', value: ':xxx*' },
+    { label: ':*xxx* (substring)', value: ':*xxx*' },
+    //{ label: 'in', value: 'in(xxx)' },
+    { label: ':> (great)', value: ':>xxx' },
+    { label: ':>= (great equal)', value: ':>=xxx' },
+    { label: ':< (less)', value: ':<xxx' },
+    { label: ':<= (less equal)', value: ':<=xxx' },
+    // { label: 'range', value: ':range(a,b)' },
+    // { label: 'string_range', value: ':string_range(a,b)' },
+    // { label: ':le_field (less equal than a field)', value: ':le_field($field)' },
+    // { label: ':eq_field (equal a field)', value: ':eq_field($field)' },
+    // { label: ':lt_field (less than a field)', value: ':lt_field($field)' },
+  ];
   const [filterByStreamFields, setFilterByStreamFields] = useState<boolean>(true);
   const timeRangeRef = useRef<TimeRange | undefined>(timeRange);
   const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
@@ -55,6 +77,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const fieldMapRef = useRef<Record<string, any>>({});
   const fieldsLastTimeRef = useRef<Record<string, null>>({});
   const streamFiltersRef = useRef<Record<string, Filter>>({});
+  const fieldFiltersRef = useRef<Record<string, Filter>>({});
   const msgFiltersRef = useRef<Record<string, Filter>>({});
 
   // 根据几个全局的 map, 生成 logsQL 语句
@@ -83,12 +106,27 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         } else {
           sb.append(',');
         }
-        sb.append(k);
+        sb.append(JSON.stringify(k));
         sb.append(streamFilters[k].operator);
         sb.append(JSON.stringify(streamFilters[k].value ?? ''));
       }
       sb.append('} ');
     }
+    //
+    const fieldFilters = fieldFiltersRef.current;
+    for (const k in fieldFilters) {
+      sb.append(JSON.stringify(k));
+      const op = fieldFilters[k]?.operator ?? '';
+      const val = fieldFilters[k]?.value ?? '';
+      if (op.includes('xxx')) {
+        sb.append(`${op.replace('xxx', JSON.stringify(val ?? ''))}`)
+      } else {
+        sb.append(op)
+        sb.append(JSON.stringify(val ?? ''))
+      }
+      sb.append(' ')
+    }
+    //
     if ('_msg' in msgFiltersRef.current) {
       const v = msgFiltersRef.current['_msg'];
       if (v.operator.length > 0 && v.value.length > 0) {
@@ -158,12 +196,89 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     generateLogsQL();
   };
 
-  const onDynamicFieldSelectChange = (value?: string | null) => {
+  const onDynamicFieldSelectChange = async (value?: string | null) => {
     setFieldSelectorDynamicValue(value ?? null);
+    // todo: 拉 n 个值，猜测数据类型
+    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    const uid = await resolveDatasourceUid();
+    if (!uid) {
+      // eslint-disable-next-line no-console
+      console.error('field_values: datasource uid not found');
+      return;
+    }
+    try {
+      const resp = await getBackendSrv().post(
+        `/api/datasources/uid/${uid}/resources/select/logsql/field_values`,
+        {
+          query: '*',
+          start: '1d',
+          limit: '50',
+          field: value,
+        }
+      );
+      const isAllNumber =
+        Array.isArray(resp?.values) &&
+        resp.values.every((item: any) => {
+          const v = item?.value;
+          const n = Number(v);
+          return Number.isFinite(n);
+        });
+      if (textarea) {
+        textarea.value = `isAllNumber: ${String(isAllNumber)}`;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('field_values error', err);
+      if (textarea) {
+        textarea.value = String(err);
+      }
+    }
   };
 
   const onDynamicFieldOperatorChange = (value?: string | null) => {
     setFieldOperatorDynamicValue(value ?? null);
+  };
+
+  const onAddFieldFilterClick = () => {
+    //const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+    const fieldVal = fieldSelectorDynamicValue ?? '';
+    const operatorVal = fieldOperatorDynamicValue ?? '';
+    const valueVal = fieldValueDynamic ?? '';
+    if (!fieldVal || !operatorVal || !valueVal) {
+      return;
+    }
+    const operatorText =
+      (fieldOperatorDynamicOptions.find((o) => o.value === operatorVal)?.label ??
+        defaultFieldOperatorOptions.find((o) => o.value === operatorVal)?.label ??
+        operatorVal);
+    fieldFiltersRef.current[fieldVal] = { operator: operatorVal, value: valueVal };
+
+    const addedTd = document.getElementById('addedFieldFilters') as HTMLTableCellElement | null;
+    if (addedTd) {
+      const div = document.createElement('div');
+      const textSpan = document.createElement('span');
+      textSpan.textContent = `${fieldVal} ${operatorText} ${valueVal} `;
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '❌';
+      removeBtn.style.border = 'none';
+      removeBtn.addEventListener('click', () => onRemoveFieldFilterClick(div, fieldVal));
+      div.appendChild(textSpan);
+      div.appendChild(removeBtn);
+      addedTd.appendChild(div);
+    }
+    // if (textarea) {
+    //   textarea.value = `field: ${fieldVal}\noperator: ${operatorVal}\nvalue: ${valueVal}`;
+    // }
+
+
+    generateLogsQL();
+  };
+
+  const onRemoveFieldFilterClick = (wrapper: HTMLElement, fieldKey: string) => {
+    wrapper.remove();
+    delete fieldFiltersRef.current[fieldKey];
+    generateLogsQL();
   };
 
   const onFilterByStreamFieldsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -207,18 +322,18 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   const onLogsqlTest = () => {
-    const respTextarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
     const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
     const startTs = timeRangeRef.current?.from?.valueOf();
     const endTs = timeRangeRef.current?.to?.valueOf();
     const query = logsqlEl?.value ?? '';
 
     if (!startTs || !endTs || !query || !datasourceUid) {
-      if (respTextarea) {
-        respTextarea.value = 'Missing time range, query, or datasource UID';
-      }
+      setTestResult('Missing time range, query, or datasource UID');
+      setTestError('');
       return;
     }
+    setTestResult('Testing LogsQL...');
+    setTestError('');
 
     const body = {
       queries: [
@@ -228,7 +343,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           //editorMode: 'code',
           expr: query,
           queryType: 'hits',
-          maxLines: 1000,
+          maxLines: 100,
           step: '1d',
           // fields: [],
           // supportingQueryType: 'logsVolume',
@@ -245,15 +360,61 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     getBackendSrv()
       .post(`/api/ds/query?ds_type=victoriametrics-logs-datasource&requestId=logsql_test`, body)
       .then((resp) => {
-        if (respTextarea) {
-          respTextarea.value = JSON.stringify(resp, null, 2);
+        const status = resp?.results?.A?.status ?? 200;
+        switch (status) {
+          case 200:
+            {
+              const frames = resp?.results?.A?.frames;
+              let formatted = '';
+              if (Array.isArray(frames) && frames.length > 0) {
+                const values = frames[0]?.data?.values;
+                if (
+                  Array.isArray(values) &&
+                  Array.isArray(values[0]) &&
+                  Array.isArray(values[1]) &&
+                  values[0].length > 0 &&
+                  values[1].length > 0
+                ) {
+                  const ts = Number(values[0][0]);
+                  const val = values[1][0];
+                  const pad = (n: number) => String(n).padStart(2, '0');
+                  if (Number.isFinite(ts)) {
+                    const d = new Date(ts);
+                    formatted = `<br/> * ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+                      d.getHours()
+                    )}:${pad(d.getMinutes())}:${pad(d.getSeconds())} hits=${String(val)}`;
+                  }
+                }
+              }
+              setTestResult('LogsQL test success:' + formatted);
+              setTestError('');
+            }
+            break;
+          default:
+            setTestResult(String(status));
+            setTestError(resp?.results?.A?.error ?? '');
+            break;  
         }
       })
-      .catch((err) => {
-        if (respTextarea) {
-          respTextarea.value = String(err);
-        }
-      });
+      .catch((err:any)=>{
+        setTestResult(err?.statusText ?? '');
+        setTestError(err?.data?.results?.A?.error ?? '');
+        // console.dir(err);
+        //   const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
+        //   if (textarea) {
+        //     textarea.value = err.toString();
+        //   }
+      })
+
+      // .catch((err) => {
+      //   setTestResult('LogsQL test error');
+      //   try {
+      //     const parsed = (err as any)?.response?.data?.results?.A?.error ?? '';
+      //     setTestError(String(parsed));
+      //   } catch {
+      //     setTestError(String(err));
+      //   }
+      // });
   };
 
   // 当输入正则表达式变化时
@@ -306,13 +467,13 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           const val = filters[key]?.value ?? '';
           const mapped = operatorMap[op] ?? op;
           if (mapped.includes('xxx')) {
-            expressions.push(`${key}${mapped.replace('xxx', JSON.stringify(val ?? ''))}`);
+            expressions.push(`\"${key}\"${mapped.replace('xxx', JSON.stringify(val ?? ''))}`);
           } else {
-            expressions.push(`${key}${mapped}${val}`);
+            expressions.push(`\"${key}\"${mapped}${val}`);
           }
         });
       }
-      const queryExpr = expressions.join(',');
+      const queryExpr = expressions.join(' ');   // 表达式之间以空格分割
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
         query: queryExpr,
         start: '',
@@ -777,7 +938,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                   <tr>
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields:</td>
                     <td style={{ padding: '4px 0' }}>
-                      <table style={{ width: '500' }}>
+                      <table style={{ width: '800' }}>
                         <tbody id="field_filter_tbody">
                           <tr>
                             <td colSpan={2}>
@@ -791,9 +952,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                                 filter by stream fields
                               </label>
                             </td>
+                            <td colSpan={2} id="addedFieldFilters">
+
+                            </td>
                           </tr>
                           <tr>
-                            <td>
+                            <td valign="top">
                               <Select
                                 width={25}
                                 options={fieldSelectorDynamicOptions}
@@ -804,18 +968,31 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                                 onChange={(v) => onDynamicFieldSelectChange(v.value)}
                               />
                             </td>
-                            <td>
+                            <td valign="top">
                               <Select
                                 width={25}
-                                options={fieldOperatorDynamicOptions}
+                                options={
+                                  fieldOperatorDynamicOptions.length
+                                    ? fieldOperatorDynamicOptions
+                                    : defaultFieldOperatorOptions
+                                }
                                 allowCustomValue={false}
                                 placeholder="Choose operator"
                                 value={fieldOperatorDynamicOptions.find((o) => o.value === fieldOperatorDynamicValue)}
                                 onChange={(v) => onDynamicFieldOperatorChange(v.value)}
                               />
                             </td>
-                            <td>
-                              <TextArea placeholder="input field value" />
+                            <td valign="top">
+                              <TextArea
+                                placeholder="input field value"
+                                value={fieldValueDynamic}
+                                onChange={(e) => setFieldValueDynamic(e.currentTarget.value)}
+                              />
+                            </td>
+                            <td valign="top">
+                              <span style={{ padding: '3px' }}>
+                                <button onClick={onAddFieldFilterClick}>Add</button>
+                              </span>
                             </td>
                           </tr>
                         </tbody>
@@ -909,6 +1086,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                   Test LogsQL
                 </button>
               </div>
+              <div id="testResult">{testResult}</div>
+              {testError ? <div style={{ color: 'red' }}>{testError}</div> : null}
             </td>
           </tr>
         </tbody>
