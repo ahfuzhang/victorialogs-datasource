@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { PanelPlugin, type PanelProps, type StandardEditorProps, type TimeRange } from '@grafana/data';
 import { Select, TextArea } from '@grafana/ui';
 import { getBackendSrv } from '@grafana/runtime';
+import { locationService } from '@grafana/runtime';
 
 interface LogFilterOptions {
   yaml: string;
@@ -42,12 +43,27 @@ const sysFields: Record<string, null> = {
 };
 
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data }) => {
-  const [demoOption, setDemoOption] = useState<string | null>(null);
   const [fieldSelectorDynamicValue, setFieldSelectorDynamicValue] = useState<string | null>(null);
   const [fieldSelectorDynamicOptions, setFieldSelectorDynamicOptions] = useState<Option[]>([]);
   const [fieldOperatorDynamicValue, setFieldOperatorDynamicValue] = useState<string | null>(null);
   const [fieldOperatorDynamicOptions] = useState<Option[]>([]);
   const [fieldValueDynamic, setFieldValueDynamic] = useState<string>('');
+  const [fullTextSearch, setFullTextSearch] = useState<string>('');
+  const [fullTextSearchOperator, setFullTextSearchOperator] = useState<string | null>(null);
+  const [messageValue, setMessageValue] = useState<string>('');
+  // useEffect(() => {
+  //   alert(2);
+  // }, []);
+
+  const onFullTextSearchBlur = (val: string) => {
+    const op = fullTextSearchOperator ?? '';
+    const value = val ?? '';
+    if (!op || !value) {
+      return;
+    }
+    fulltextFiltersRef.current['fulltext'] = { operator: op, value };
+    generateLogsQL();
+  };
   const [testResult, setTestResult] = useState<string>('');
   const [testError, setTestError] = useState<string>('');
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
@@ -79,6 +95,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const streamFiltersRef = useRef<Record<string, Filter>>({});
   const fieldFiltersRef = useRef<Record<string, Filter>>({});
   const msgFiltersRef = useRef<Record<string, Filter>>({});
+  const fulltextFiltersRef = useRef<Record<string, Filter>>({});
 
   // 根据几个全局的 map, 生成 logsQL 语句
   const generateLogsQL = () => {
@@ -136,14 +153,24 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         sb.append(' ');
       }
     }
+    //
+    if ('fulltext' in fulltextFiltersRef.current) {
+      const ft = fulltextFiltersRef.current['fulltext'];
+      if (ft.operator.length > 0 && ft.value.length > 0) {
+        let expr = '';
+        if (ft.operator.includes('xxx')) {
+          expr = ft.operator.replace(/xxx/g, JSON.stringify(ft.value ?? ''));
+        } else {
+          expr = `${ft.operator}${ft.value}`;
+        }
+        sb.append(expr);
+        sb.append(' ');
+      }
+    }
+    sb.append('| limit 10')
     logsql.value = sb.toString();
   };
   const getFieldsByStreamFields = (streamField?: string, operator?: string, value?: string | null) => {
-    // const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    // if (textarea) {
-    //   const text = `${streamField ?? ''} ${operator ?? ''} ${value ?? ''}`.trim();
-    //   textarea.value = text;
-    // }
     const m = streamFiltersRef.current;
     if (m && streamField) {
       // 记录下修改后的 stream filter
@@ -199,7 +226,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const onDynamicFieldSelectChange = async (value?: string | null) => {
     setFieldSelectorDynamicValue(value ?? null);
     // todo: 拉 n 个值，猜测数据类型
-    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
     const uid = await resolveDatasourceUid();
     if (!uid) {
       // eslint-disable-next-line no-console
@@ -223,15 +249,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           const n = Number(v);
           return Number.isFinite(n);
         });
-      if (textarea) {
-        textarea.value = `isAllNumber: ${String(isAllNumber)}`;
-      }
+      console.info('field_values isAllNumber', isAllNumber);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('field_values error', err);
-      if (textarea) {
-        textarea.value = String(err);
-      }
     }
   };
 
@@ -240,7 +261,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   const onAddFieldFilterClick = () => {
-    //const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
     const fieldVal = fieldSelectorDynamicValue ?? '';
     const operatorVal = fieldOperatorDynamicValue ?? '';
     const valueVal = fieldValueDynamic ?? '';
@@ -274,6 +294,14 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
     generateLogsQL();
   };
+  const fullTextSearchOptions: Option[] = [
+    { label: '(word/phrase)', value: 'xxx' },
+    { label: '= (equal)', value: '=xxx' },
+    { label: '~ (regexp match)', value: '~xxx' },
+    { label: '!~ (not match)', value: '!~xxx' },
+    { label: 'xx* (prefix)', value: 'xxx*' },
+    { label: '*xx* (substring)', value: '*xxx*' },
+  ];
 
   const onRemoveFieldFilterClick = (wrapper: HTMLElement, fieldKey: string) => {
     wrapper.remove();
@@ -380,7 +408,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                   const pad = (n: number) => String(n).padStart(2, '0');
                   if (Number.isFinite(ts)) {
                     const d = new Date(ts);
-                    formatted = `<br/> * ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+                    formatted = ` * ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
                       d.getHours()
                     )}:${pad(d.getMinutes())}:${pad(d.getSeconds())} hits=${String(val)}`;
                   }
@@ -399,11 +427,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       .catch((err:any)=>{
         setTestResult(err?.statusText ?? '');
         setTestError(err?.data?.results?.A?.error ?? '');
-        // console.dir(err);
-        //   const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-        //   if (textarea) {
-        //     textarea.value = err.toString();
-        //   }
       })
 
       // .catch((err) => {
@@ -425,14 +448,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       generateLogsQL();
       await loadFieldNamesByStreamFields();
     }
-    // const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    // if (textarea) {
-    //   textarea.value = val;
-    // }
   };
 
   const loadFieldNamesByStreamFields = async () => {
-    //const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
     const uid = await resolveDatasourceUid();
     if (!uid) {
       // eslint-disable-next-line no-console
@@ -565,12 +583,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     operator?: string,
     streamField?: string
   ) => {
-    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    // if (textarea) {
-    //   const text = `${streamField ?? ''} ${operator ?? ''} ${val ?? ''}`.trim();
-    //   textarea.value = text;
-    // }
-
     if (!streamField) {
       return;
     }
@@ -593,10 +605,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
     try {
       const resp = await getBackendSrv().post(path, payload);
-      // if (textarea) {
-      //   textarea.value = JSON.stringify(resp);
-      // }
-
       if (source && source instanceof HTMLElement) {
         const options =
           Array.isArray(resp?.values) && resp.values.length
@@ -606,9 +614,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
               }))
             : [];
         renderValueSelectForWrapper(source, options, operator, streamField);
-        if (textarea) {
-          textarea.value = JSON.stringify(options);
-        }
       }
 
       // eslint-disable-next-line no-console
@@ -623,10 +628,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // eslint-disable-next-line no-console
     const value = selectEl.value;
     console.log('onchange select', value);
-    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    if (textarea) {
-      textarea.value = value;
-    }
     let jsonData: any;
     try {
       jsonData = JSON.parse(value);
@@ -650,6 +651,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         if (streamField) {
           delete streamFiltersRef.current[streamField];
         }
+        generateLogsQL();
         break;
       case '=':
       case '!=':
@@ -734,9 +736,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const tr = document.createElement('tr');
 
     const nameTd = document.createElement('td');
-    nameTd.style.width = '220px';
+    const nameWidth : number = 250;
+    nameTd.style.width = `${nameWidth}px`;
     nameTd.innerHTML = `
-      <span style="display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:220px;text-align:right;" title="hits:${hits}">
+      <span style="display:inline-block;max-width:${nameWidth}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:${nameWidth}px;text-align:right;" title="hits:${hits}">
         ${stream_field_name ?? ''}:
       </span>`;
 
@@ -770,10 +773,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   // stream_field_names
   const on_stream_field_names_response = (resp: any) => {
-    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    if (textarea) {
-      textarea.value = JSON.stringify(resp, null, 2);
-    }
     const tbody = document.getElementById('stream_filter_tbody');
     if (!tbody) {
       console.log('not found stream_filter_tbody');
@@ -787,8 +786,34 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
   };
 
-  const onClick = () => {
-    window.alert('1');
+  const onClickQueryButton = () => {
+    const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
+    const logsql = logsqlEl?.value ?? '';
+    console.info('onClickQueryButton', logsql);
+    if (!logsqlEl) {
+      setTestError('logsql element not found');
+      return;
+    }
+    if (!logsql) {
+      setTestError('logsql is empty');
+      return;
+    }
+    locationService.partial({ 'var-logsql': logsql }, true);
+    setTestResult('Query applied and dashboard refresh triggered');
+    // const url = new URL(window.location.href);
+    // url.searchParams.set('var-logsql', logsql);
+    // window.history.replaceState({}, '', url.toString());
+
+    // try {
+    //   const appEvents = getAppEvents();
+    //   // trigger dashboard variable refresh + panel reload
+    //   appEvents.publish({ type: 'dashboards-refresh' } as any);
+    //   appEvents.publish({ type: 'refresh' } as any);
+    //   setTestResult('Query applied and dashboard refresh triggered');
+    // } catch (err) {
+    //   setTestError('Failed to trigger dashboard refresh');
+    //   console.error('dashboard refresh error', err);
+    // }
   };
 
   // run once on mount; avoid re-running/clearing form state on time range change
@@ -865,11 +890,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   const handleFieldNamesResponse = (streamFields: any, resp: any) => {
     //alert(5);
-    const textarea = document.getElementById('response_data') as HTMLTextAreaElement | null;
-    if (!textarea) {
-      return;
-    }
-    textarea.value += '\n\n' + JSON.stringify(resp);
     console.info('stream_field_names:', streamFields);
     const streamFieldMap: Record<string, null> = {};
     if (Array.isArray(streamFields?.values)) {
@@ -881,7 +901,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       });
     }
     streamFieldMapRef.current = streamFieldMap;
-    textarea.value += '\n\n' + JSON.stringify(streamFieldMap);
     //
 
     const fieldMap: Record<string, null> = {};
@@ -902,10 +921,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       });
     }
     fieldMapRef.current = fieldMap;
-    textarea.value += '\n\n' + JSON.stringify(fieldMap);
-    // if (textarea) {
-    //   textarea.value = JSON.stringify(fieldMap);
-    // }
     showFieldSelector();
   };
 
@@ -1001,32 +1016,56 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                   </tr>
                   <tr>
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>message:</td>
-                    <td style={{ padding: '4px 0' }}>
+                    <td style={{ padding: '4px 0' }} valign="top">
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
                         <Select
-                          width={30}
+                          width={25}
                           options={[
                             { label: ':~ (regexp match)', value: ':~' },
                             { label: ':!~ (not match)', value: ':!~' },
                           ]}
                           allowCustomValue={false}
                           onChange={(v) => onFieldOperatorChange(v.value)}
-                          placeholder="op"
+                          placeholder="choose operator"
                         />
-                        <input
-                          type="text"
-                          width={40}
-                          style={{ flex: 1, height: '32px', padding: '4px 8px' }}
-                          placeholder="enter value"
+                        <TextArea
+                          aria-label="Message value"
+                          value={messageValue}
+                          onChange={(e) => setMessageValue(e.currentTarget.value)}
                           onBlur={(e) => onFieldValueBlur(e.currentTarget.value)}
+                          rows={3}
+                          style={{ flex: 1 }}
+                          placeholder="enter search content for _msg field"
                         />
                       </div>
                     </td>
                   </tr>
                   <tr>
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>Full text search:</td>
-                    <td style={{ padding: '4px 0' }}>
-                      <textarea></textarea>
+                    <td style={{ padding: '4px 0' }}  valign="top">
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
+                      <Select
+                        width={25}
+                        options={fullTextSearchOptions}
+                        allowCustomValue={false}
+                        placeholder="choose operator"
+                        value={
+                          fullTextSearchOperator
+                            ? fullTextSearchOptions.find((o) => o.value === fullTextSearchOperator) ?? null
+                            : null
+                        }
+                        onChange={(v) => setFullTextSearchOperator(v.value ?? null)}
+                      />
+                      <TextArea
+                        aria-label="Full text search"
+                        placeholder="enter full text search content"
+                        value={fullTextSearch}
+                        onChange={(e) => setFullTextSearch(e.currentTarget.value)}
+                        onBlur={(e) => onFullTextSearchBlur(e.currentTarget.value)}
+                        rows={3}
+                          style={{ flex: 1 }}
+                      />
+                      </div>
                     </td>
                   </tr>
                   <tr>
@@ -1039,31 +1078,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                   </tr>
                   <tr>
                     <td colSpan={2} style={{ textAlign: 'center', paddingTop: '12px' }}>
-                      <input type="button" value="Query" onClick={onClick} />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colSpan={2} style={{ paddingTop: '8px' }}>
-                      <textarea id="response_data" style={{ width: '100%', height: '160px' }} />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td colSpan={2} style={{ paddingTop: '8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <Select
-                          width={24}
-                          placeholder="Pick one"
-                          options={[
-                            { label: 'Alpha', value: 'alpha' },
-                            { label: 'Beta', value: 'beta' },
-                            { label: 'Gamma', value: 'gamma' },
-                            { label: 'Delta', value: 'delta' },
-                          ]}
-                          value={demoOption}
-                          onChange={(v) => setDemoOption(v.value ?? null)}
-                        />
-                        <span style={{ color: '#888' }}>Selected: {demoOption ?? '(none)'}</span>
-                      </div>
+                      <button type="button" onClick={onClickQueryButton}>
+                        Query
+                      </button>
                     </td>
                   </tr>
                 </tbody>

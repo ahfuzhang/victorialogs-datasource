@@ -1,0 +1,171 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 3,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 2,
+      "panels": [],
+      "title": "Log Filter",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "yaml": ""
+      },
+      "pluginVersion": "12.1.4",
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "*",
+          "queryType": "statsRange",
+          "refId": "A"
+        }
+      ],
+      "title": "Log Filter",
+      "type": "victoriametrics-logfilter-panel"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 3,
+      "panels": [],
+      "title": "Details",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 25,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 4,
+      "options": {
+        "dedupStrategy": "none",
+        "enableInfiniteScrolling": false,
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "pluginVersion": "12.1.4",
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "${logsql:raw}",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "title": "Log details",
+      "type": "logs"
+    }
+  ],
+  "preload": false,
+  "schemaVersion": 41,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "allowCustomValue": false,
+        "current": {
+          "text": "stress-test",
+          "value": "bf5hu1hl4ritcb"
+        },
+        "name": "datasource",
+        "options": [],
+        "query": "victoriametrics-logs-datasource",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "allowCustomValue": true,
+        "description": "",
+        "hide": 2,
+        "name": "logsql",
+        "options": [],
+        "query": "",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Log Explorer",
+  "uid": "831cf487-3134-4aaa-8e86-46fa31b95000",
+  "version": 2
+}
