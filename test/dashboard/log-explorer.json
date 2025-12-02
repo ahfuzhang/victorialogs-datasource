@@ -54,18 +54,6 @@
         "yaml": ""
       },
       "pluginVersion": "12.1.4",
-      "targets": [
-        {
-          "datasource": {
-            "type": "victoriametrics-logs-datasource",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "*",
-          "queryType": "statsRange",
-          "refId": "A"
-        }
-      ],
       "title": "Log Filter",
       "type": "victoriametrics-logfilter-panel"
     },
@@ -154,7 +142,7 @@
         "type": "textbox",
         "current": {
           "text": "",
-          "value": ""
+          "value": "* | limit 10"
         }
       }
     ]

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { PanelPlugin, type PanelProps, type StandardEditorProps, type TimeRange } from '@grafana/data';
-import { Select, TextArea } from '@grafana/ui';
+import { Combobox, Select, TextArea } from '@grafana/ui';
 import { getBackendSrv } from '@grafana/runtime';
 import { locationService } from '@grafana/runtime';
 
@@ -51,6 +51,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const [fullTextSearch, setFullTextSearch] = useState<string>('');
   const [fullTextSearchOperator, setFullTextSearchOperator] = useState<string | null>(null);
   const [messageValue, setMessageValue] = useState<string>('');
+  const [limitEnabled, setLimitEnabled] = useState<boolean>(true);
+  const [limitValue, setLimitValue] = useState<string>('100');
   // useEffect(() => {
   //   alert(2);
   // }, []);
@@ -64,6 +66,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     fulltextFiltersRef.current['fulltext'] = { operator: op, value };
     generateLogsQL();
   };
+
+  useEffect(() => {
+    generateLogsQL();
+  }, [limitEnabled, limitValue]);
   const [testResult, setTestResult] = useState<string>('');
   const [testError, setTestError] = useState<string>('');
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
@@ -167,7 +173,19 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         sb.append(' ');
       }
     }
-    sb.append('| limit 10')
+    if (Object.keys(streamFilters).length == 0 && 
+      Object.keys(fieldFilters).length == 0 && 
+      Object.keys(msgFiltersRef.current).length == 0 && 
+      Object.keys(fulltextFiltersRef.current).length == 0) {
+        sb.append('* ');
+    }
+    if (limitEnabled) {
+      const num = Number(limitValue);
+      const safeLimit = Number.isFinite(num) && num > 0 ? num : 10;
+      sb.append('| limit ');
+      sb.append(String(safeLimit));
+      sb.append(' ');
+    }
     logsql.value = sb.toString();
   };
   const getFieldsByStreamFields = (streamField?: string, operator?: string, value?: string | null) => {
@@ -976,7 +994,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                               <Select
                                 width={25}
                                 options={fieldSelectorDynamicOptions}
-                                allowCustomValue
+                                allowCustomValue={true}
                                 placeholder="Select field"
                                 id="selForFieldNames"
                                 value={fieldSelectorDynamicOptions.find((o) => o.value === fieldSelectorDynamicValue)}
@@ -1018,13 +1036,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>message:</td>
                     <td style={{ padding: '4px 0' }} valign="top">
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
-                        <Select
+                        <Combobox
                           width={25}
                           options={[
                             { label: ':~ (regexp match)', value: ':~' },
                             { label: ':!~ (not match)', value: ':!~' },
                           ]}
-                          allowCustomValue={false}
                           onChange={(v) => onFieldOperatorChange(v.value)}
                           placeholder="choose operator"
                         />
@@ -1070,15 +1087,41 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                   </tr>
                   <tr>
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>query options</td>
-                    <td style={{ padding: '4px 0' }}>empty</td>
+                    <td style={{ padding: '4px 0' }}>
+
+
+                    </td>
                   </tr>
                   <tr>
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>output options</td>
-                    <td style={{ padding: '4px 0' }}>empty</td>
+                    <td style={{ padding: '4px 0' }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                          type="checkbox"
+                          checked={limitEnabled}
+                          onChange={(e) => {
+                            setLimitEnabled(e.currentTarget.checked);
+                            //generateLogsQL();
+                          }}
+                        />
+                        <span>limit:</span>
+                        <input
+                          type="number"
+                          value={limitValue}
+                          onChange={(e) => setLimitValue(e.currentTarget.value)}
+                          //onBlur={() => generateLogsQL()}
+                          style={{ width: '80px' }}
+                        />
+                      </div>
+                    </td>
                   </tr>
                   <tr>
                     <td colSpan={2} style={{ textAlign: 'center', paddingTop: '12px' }}>
-                      <button type="button" onClick={onClickQueryButton}>
+                      <button
+                        type="button"
+                        onClick={onClickQueryButton}
+                        style={{ padding: '10px 24px', fontSize: '16px', borderRadius: '6px' }}
+                      >
                         Query
                       </button>
                     </td>

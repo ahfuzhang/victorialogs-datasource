@@ -175,6 +175,7 @@ docker_run:
 	docker run -it --rm \
 		--name grafana \
 		-p 3000:3000 \
+		-e GF_PUBLIC_DASHBOARDS_ENABLED=false \
 		-v ./test/data/:/var/lib/grafana \
 		-v ./test/config/:/etc/grafana \
 		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
