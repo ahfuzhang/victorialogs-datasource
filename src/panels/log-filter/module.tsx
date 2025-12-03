@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import { PanelPlugin, type PanelProps, type StandardEditorProps, type TimeRange } from '@grafana/data';
+import { PanelPlugin, type PanelProps, type TimeRange } from '@grafana/data';
 import { Combobox, Select, TextArea } from '@grafana/ui';
 import { getBackendSrv } from '@grafana/runtime';
 import { locationService } from '@grafana/runtime';
@@ -10,6 +10,7 @@ interface LogFilterOptions {
   yaml: string;
   showLogsqlTextarea?: boolean;
   streamFieldList?: string;
+  logsqlVariable?: string;
 }
 
 type Option = { label: string; value: string };
@@ -46,6 +47,7 @@ const sysFields: Record<string, null> = {
 
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data, options }) => {
   const showLogsqlTextarea = options?.showLogsqlTextarea ?? true;
+  const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
   const [fieldSelectorDynamicValue, setFieldSelectorDynamicValue] = useState<string | null>(null);
   const [fieldSelectorDynamicOptions, setFieldSelectorDynamicOptions] = useState<Option[]>([]);
   const [fieldOperatorDynamicValue, setFieldOperatorDynamicValue] = useState<string | null>(null);
@@ -160,8 +162,26 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const v = msgFiltersRef.current['_msg'];
       if (v.operator.length > 0 && v.value.length > 0) {
         sb.append('_msg');
-        sb.append(v.operator);
-        sb.append(JSON.stringify(v.value ?? ''));
+        switch (v.operator){
+          case ':~':
+          case ':!~':
+            sb.append(v.operator);
+            sb.append(JSON.stringify(v.value ?? ''));
+            break;
+          case ':xxx*':
+            sb.append(':')
+            sb.append(JSON.stringify(v.value ?? ''));
+            sb.append('*')
+            break;
+          case ':*xxx*':
+            sb.append(':*')
+            sb.append(JSON.stringify(v.value ?? ''));
+            sb.append('*')
+            break;
+          default:
+            alert('not support operator:' + v.operator);  
+            break;
+        }
         sb.append(' ');
       }
     }
@@ -896,8 +916,15 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setTestError('logsql is empty');
       return;
     }
-    locationService.partial({ 'var-logsql': logsql }, true);
-    setTestResult('Query applied and dashboard refresh triggered');
+    const varName:Record<string,any> = {};
+    // 根据配置中的变量名来输出
+    let varKey = `var-${logsqlVariable}`;
+    if (logsqlVariable.startsWith('$')){
+      varKey = `var-` + logsqlVariable.substring(1);
+    }
+    varName[varKey] = logsql;
+    locationService.partial(varName, true);
+    setTestResult('Query applied and dashboard refresh triggered:' + JSON.stringify(varName));
     // const url = new URL(window.location.href);
     // url.searchParams.set('var-logsql', logsql);
     // window.history.replaceState({}, '', url.toString());
@@ -1058,13 +1085,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields:</td>
-                    <td style={{ padding: '4px 0' }}>
-                      <table style={{ width: '800' }}>
-                        <tbody id="field_filter_tbody">
-                          <tr>
-                            <td colSpan={2}>
-                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>fields:
+                      <br/>
+                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                                 <input
                                   type="checkbox"
                                   checked={filterByStreamFields}
@@ -1073,8 +1096,13 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                                 />
                                 filter by stream fields
                               </label>
-                            </td>
-                            <td colSpan={2} id="addedFieldFilters"></td>
+
+                    </td>
+                    <td style={{ padding: '4px 0' }}>
+                      <table style={{ width: '800' }}>
+                        <tbody id="field_filter_tbody">
+                          <tr>
+                            <td colSpan={4} id="addedFieldFilters"></td>
                           </tr>
                           <tr>
                             <td valign="top">
@@ -1128,6 +1156,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                           options={[
                             { label: ':~ (regexp match)', value: ':~' },
                             { label: ':!~ (not match)', value: ':!~' },
+                            { label: ':xxx* (prefix)', value: ':xxx*' },
+                            { label: ':*xxx* (substring)', value: ':*xxx*' },
                           ]}
                           onChange={(v) => onFieldOperatorChange(v.value)}
                           placeholder="choose operator"
@@ -1242,30 +1272,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   );
 };
 
-const YamlEditor: React.FC<StandardEditorProps<string, any, any>> = ({ value, onChange }) => {
-  const rows = useMemo(() => Math.max(10, (value?.split('\n').length ?? 0) + 4), [value]);
-
-  return (
-    <TextArea
-      aria-label="Log filter YAML"
-      rows={rows}
-      placeholder="Enter YAML configuration"
-      value={value ?? ''}
-      onChange={(event) => onChange(event.currentTarget.value)}
-    />
-  );
-};
-
 export const plugin = new PanelPlugin<LogFilterOptions>(LogFilterPanel).setPanelOptions((builder) =>
   builder
-    .addCustomEditor({
-      id: 'yaml',
-      path: 'yaml',
-      name: 'YAML config',
-      description: 'YAML used to configure the LogFilter panel.',
-      editor: YamlEditor,
-      defaultValue: '',
-    })
     .addBooleanSwitch({
       path: 'showLogsqlTextarea',
       name: 'Show logsql textarea',
@@ -1278,5 +1286,12 @@ export const plugin = new PanelPlugin<LogFilterOptions>(LogFilterPanel).setPanel
       description:
         'Enter the stream fields you want to display, separated by commas. (All stream fields will be displayed automatically by default.)',
       defaultValue: '',
+    })
+    .addTextInput({
+      path: 'logsqlVariable',
+      name: 'LogsQL Varaible',
+      description:
+        'After generating the logsql query statement, it can be output to a variable in a dashboard for other panels to reference.',
+      defaultValue: '\$logsql',
     })
 );
