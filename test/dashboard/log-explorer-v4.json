@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 11,
+  "id": 18,
   "links": [],
   "panels": [
     {
@@ -85,7 +85,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "continuous-GrYlRd",
+            "mode": "palette-classic",
             "seriesBy": "last"
           },
           "custom": {
@@ -97,7 +97,7 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "bars",
-            "fillOpacity": 0,
+            "fillOpacity": 50,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -109,19 +109,19 @@
             "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
-              "type": "linear"
+              "log": 2,
+              "type": "symlog"
             },
-            "showPoints": "auto",
+            "showPoints": "always",
             "spanNulls": false,
             "stacking": {
               "group": "A",
-              "mode": "none"
+              "mode": "normal"
             },
             "thresholdsStyle": {
               "mode": "off"
             }
           },
-          "displayName": "log count",
           "mappings": [],
           "noValue": "no data found",
           "thresholds": {
@@ -141,14 +141,13 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
+        "h": 7,
         "w": 24,
         "x": 0,
         "y": 18
       },
       "id": 5,
       "interval": "${step}",
-      "step": "${step}",
       "options": {
         "legend": {
           "calcs": [],
@@ -171,9 +170,11 @@
           },
           "editorMode": "code",
           "expr": "${logsql:raw}",
-          "legendFormat": "count",
+          "fields": [
+            "${field:raw}"
+          ],
+          "legendFormat": "",
           "queryType": "hits",
-          "fields":["level"],
           "refId": "A"
         }
       ],
@@ -193,7 +194,7 @@
         "h": 25,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 25
       },
       "id": 4,
       "options": {
@@ -245,8 +246,8 @@
       {
         "allowCustomValue": false,
         "current": {
-          "text": "5m",
-          "value": "5m"
+          "text": "1m",
+          "value": "1m"
         },
         "description": "",
         "name": "step",
@@ -272,7 +273,7 @@
             "value": "30s"
           },
           {
-            "selected": false,
+            "selected": true,
             "text": "1m",
             "value": "1m"
           },
@@ -282,7 +283,7 @@
             "value": "2m"
           },
           {
-            "selected": true,
+            "selected": false,
             "text": "5m",
             "value": "5m"
           },
@@ -310,18 +311,39 @@
         "query": "1s,5s,10s,30s,1m,2m,5m,10m,20m,30m,1h",
         "type": "custom"
       },
-            {
-        "allowCustomValue": true,
+      {
+        "current": {
+          "text": "* | limit 10",
+          "value": "* | limit 10"
+        },
         "description": "",
         "hide": 2,
         "name": "logsql",
-        "options": [],
-        "query": "",
-        "type": "textbox",
+        "options": [
+          {
+            "selected": true,
+            "text": "* | limit 10",
+            "value": "* | limit 10"
+          }
+        ],
+        "query": "* | limit 10",
+        "type": "textbox"
+      },
+      {
         "current": {
-          "text": "",
-          "value": "* | limit 10"
-        }
+          "text": "level",
+          "value": "level"
+        },
+        "name": "field",
+        "options": [
+          {
+            "selected": true,
+            "text": "level",
+            "value": "level"
+          }
+        ],
+        "query": "level",
+        "type": "textbox"
       }
     ]
   },
@@ -331,7 +353,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Log Explorer v3",
-  "uid": "831cf487-3134-4aaa-8e86-46fa31b95003",
-  "version": 8
+  "title": "Log Explorer v0",
+  "uid": "831cf487-3134-4aaa-8e86-46fa31b95000",
+  "version": 5
 }

@@ -11,4 +11,30 @@
 5. 状态的保持：
   - 折叠再展开后，出现重新加载的情况
 
-  
+bug:
+* field 重复的时候，界面表达有问题
+
+?
+* 如何做到 stream field 选择 last char
+
+extra_stream_filter:
+  - name: xx_last_char
+    if_exists:
+        field: trace_id
+        operator: ":="
+    operator: "="
+    value:
+      type: substring
+      start: -1
+      end: "N/A"
+
+
+extra_stream_filter:
+  - name: trace_id_last_char
+    if_exists:
+      field: trace_id
+      operator: equal
+    operator: equal
+    value:
+      regexp: ".*(?<lastchar>[A-Za-z0-9])$"
+      group_name: "lastchar"

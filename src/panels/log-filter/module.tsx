@@ -303,6 +303,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     setFieldOperatorDynamicValue(value ?? null);
   };
 
+  // 点击 add 按钮
   const onAddFieldFilterClick = () => {
     const fieldVal = fieldSelectorDynamicValue ?? '';
     const operatorVal = fieldOperatorDynamicValue ?? '';
@@ -314,6 +315,18 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       fieldOperatorDynamicOptions.find((o) => o.value === operatorVal)?.label ??
       defaultFieldOperatorOptions.find((o) => o.value === operatorVal)?.label ??
       operatorVal;
+    if (fieldVal in fieldFiltersRef.current) {
+      // 存在上次结果的基础上，应该删除 dom 中的 div 行
+      const addedTd = document.getElementById('addedFieldFilters') as HTMLTableCellElement | null;
+      if (addedTd) {
+        Array.from(addedTd.children).forEach((child) => {
+          const text = child.textContent ?? '';
+          if (text.includes(fieldVal)) {
+            child.remove();
+          }
+        });
+      }
+    }
     fieldFiltersRef.current[fieldVal] = { operator: operatorVal, value: valueVal };
 
     const addedTd = document.getElementById('addedFieldFilters') as HTMLTableCellElement | null;
@@ -924,7 +937,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
     varName[varKey] = logsql;
     locationService.partial(varName, true);
-    setTestResult('Query applied and dashboard refresh triggered:' + JSON.stringify(varName));
+    setTestResult('Query applied and dashboard refresh triggered');
     // const url = new URL(window.location.href);
     // url.searchParams.set('var-logsql', logsql);
     // window.history.replaceState({}, '', url.toString());
