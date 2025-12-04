@@ -38,3 +38,14 @@ extra_stream_filter:
     value:
       regexp: ".*(?<lastchar>[A-Za-z0-9])$"
       group_name: "lastchar"
+
+## 需求：固定展示的字段
+
+fixed_field_filter:
+  - field: trace_id
+    text: "trace_id = "
+    operator: equal
+
+## 需求：加个面板折叠功能
+
+## 需求: output 的时候，可以选择输出字段
