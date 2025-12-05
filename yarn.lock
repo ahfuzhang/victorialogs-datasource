@@ -7018,7 +7018,7 @@ react-custom-scrollbars-2@4.5.0:
 
 react-data-grid@grafana/react-data-grid#a922856b5ede21d55db3fdffb6d38dc76bdc7c58:
   version "7.0.0-beta.56"
-  resolved "git+ssh://git@github.com/grafana/react-data-grid.git#a922856b5ede21d55db3fdffb6d38dc76bdc7c58"
+  resolved "https://github.com/grafana/react-data-grid.git#a922856b5ede21d55db3fdffb6d38dc76bdc7c58"
   integrity sha512-3l1TSsed0vcV6357p+2DLKfrVi+RdOepbRv4fr3HagNkrtlxUsGdOXo2gN8t0PaDFCE28eqweyb/CGhqCC8g8g==
   dependencies:
     clsx "^2.0.0"
