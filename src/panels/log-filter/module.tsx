@@ -7,7 +7,6 @@ import { getBackendSrv } from '@grafana/runtime';
 import { locationService } from '@grafana/runtime';
 
 interface LogFilterOptions {
-  //yaml: string;
   showLogsqlTextarea?: boolean;
   streamFieldList?: string;
   logsqlVariable?: string;
@@ -79,9 +78,42 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const [limitValue, setLimitValue] = useState<string>('100');
   const [cascadeFiltering, setCascadeFiltering] = useState<boolean>(true);
   const [jsonConfig, setJsonConfig] = useState<string>(options?.jsonConfig ?? '');
-  //const [outputFieldMode, setOutputFieldMode] = useState<'all' | 'choose'>('all');
-  //const [outputPreview, setOutputPreview] = useState<string>('');
   const [outputAllFields, setOutputAllFields] = useState<boolean>(true);
+  const [testResult, setTestResult] = useState<string>('');
+  const [testError, setTestError] = useState<string>('');
+  const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
+  const [filterByStreamFields, setFilterByStreamFields] = useState<boolean>(true);
+  const timeRangeRef = useRef<TimeRange | undefined>(timeRange);
+  const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
+  const streamFieldMapRef = useRef<Record<string, null>>({});
+  const fieldMapRef = useRef<Record<string, any>>({});  // 第一次查询得到的 field names 列表
+  const fieldsAfterStreamFilterRef = useRef<Record<string, null>>({});  // stream fields 过滤后的字段
+  const streamFiltersRef = useRef<Record<string, Filter>>({}); // 当前已经选中的
+  const fieldFiltersRef = useRef<Record<string, Filter>>({});
+  const msgFiltersRef = useRef<Record<string, Filter>>({});
+  const fulltextFiltersRef = useRef<Record<string, Filter>>({});
+  const jsonConfigRef = useRef<JsonConfigShape | null>(null);  // 存在面板配置中的 json config
+  // 根据顺序进行加载的 stream field 数据
+  const streamFieldIndexMapRef = useRef<Record<number, string>>({});
+  const defaultFieldOperatorOptions: Option[] = [
+    { label: ':= (equal)', value: ':=xxx' },
+    { label: ':i() (equal, ignore case)', value: ':i(xxx)' },
+    { label: ':! (not equal)', value: ':!xxx' },
+    { label: ':~ (regexp match)', value: ':~xxx' },
+    { label: ':!~ (not match)', value: ':!~xxx' },
+    { label: ':xxx* (prefix)', value: ':xxx*' },
+    { label: ':*xxx* (substring)', value: ':*xxx*' },
+    //{ label: 'in', value: 'in(xxx)' },
+    { label: ':> (great)', value: ':>xxx' },
+    { label: ':>= (great equal)', value: ':>=xxx' },
+    { label: ':< (less)', value: ':<xxx' },
+    { label: ':<= (less equal)', value: ':<=xxx' },
+    // { label: 'range', value: ':range(a,b)' },
+    // { label: 'string_range', value: ':string_range(a,b)' },
+    // { label: ':le_field (less equal than a field)', value: ':le_field($field)' },
+    // { label: ':eq_field (equal a field)', value: ':eq_field($field)' },
+    // { label: ':lt_field (less than a field)', value: ':lt_field($field)' },
+  ];
 
   const onFullTextSearchBlur = (val: string) => {
     const op = fullTextSearchOperator ?? '';
@@ -106,48 +138,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       jsonConfigRef.current = null;
       console.error('jsonConfig parse error', err);
     }
-    //createFixedFieldFilterFromConfig();
   }, [jsonConfig]);
-  // useEffect(() => {
-  //   //createFixedFieldFilterFromConfig();
-  // }, [fixedFieldValues]);
-  const [testResult, setTestResult] = useState<string>('');
-  const [testError, setTestError] = useState<string>('');
-  const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
-  const defaultFieldOperatorOptions: Option[] = [
-    { label: ':= (equal)', value: ':=xxx' },
-    { label: ':i() (equal, ignore case)', value: ':i(xxx)' },
-    { label: ':! (not equal)', value: ':!xxx' },
-    { label: ':~ (regexp match)', value: ':~xxx' },
-    { label: ':!~ (not match)', value: ':!~xxx' },
-    { label: ':xxx* (prefix)', value: ':xxx*' },
-    { label: ':*xxx* (substring)', value: ':*xxx*' },
-    //{ label: 'in', value: 'in(xxx)' },
-    { label: ':> (great)', value: ':>xxx' },
-    { label: ':>= (great equal)', value: ':>=xxx' },
-    { label: ':< (less)', value: ':<xxx' },
-    { label: ':<= (less equal)', value: ':<=xxx' },
-    // { label: 'range', value: ':range(a,b)' },
-    // { label: 'string_range', value: ':string_range(a,b)' },
-    // { label: ':le_field (less equal than a field)', value: ':le_field($field)' },
-    // { label: ':eq_field (equal a field)', value: ':eq_field($field)' },
-    // { label: ':lt_field (less than a field)', value: ':lt_field($field)' },
-  ];
-  const [filterByStreamFields, setFilterByStreamFields] = useState<boolean>(true);
-  const timeRangeRef = useRef<TimeRange | undefined>(timeRange);
-  const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
-  const streamFieldMapRef = useRef<Record<string, null>>({});
-  const fieldMapRef = useRef<Record<string, any>>({});  // 第一次查询得到的 field names 列表
-  //const fieldsLastTimeRef = useRef<Record<string, null>>({});  // 第一次加载得到的全量字段
-  const fieldsAfterStreamFilterRef = useRef<Record<string, null>>({});  // stream fields 过滤后的字段
-  const streamFiltersRef = useRef<Record<string, Filter>>({}); // 当前已经选中的
-  const fieldFiltersRef = useRef<Record<string, Filter>>({});
-  const msgFiltersRef = useRef<Record<string, Filter>>({});
-  const fulltextFiltersRef = useRef<Record<string, Filter>>({});
-  const jsonConfigRef = useRef<JsonConfigShape | null>(null);  // 存在面板配置中的 json config
-  // 根据顺序进行加载的 stream field 数据
-  const streamFieldIndexMapRef = useRef<Record<number, string>>({});
-
   // 根据配置，创建固定的某个字段的过滤器 UI
   const createFixedFieldFilterFromConfig = () => {
     const addedTd = document.getElementById('addedFixedFieldFilters') as HTMLTableCellElement | null;
@@ -155,7 +146,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
 
-    //Array.from(addedTd.querySelectorAll('div[data-fixed-field-filter=\"true\"]')).forEach((el) => el.remove());
     const fixed_field_filter = jsonConfigRef.current?.fixed_field_filter ?? [];
     fixed_field_filter.forEach((item) => {
       let operator: string = '';
@@ -170,7 +160,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           return;
       }
       const div = document.createElement('div');
-      //div.dataset.fixedFieldFilter = 'true';
       const span = document.createElement('span');
       let text = item?.text ?? "";
       if (text.length == 0) {
@@ -189,25 +178,14 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const input = document.createElement('input');
       input.type = 'text';
       input.style.width = '180px';
-      // input.onblur = function(){
-      //   onFixedFieldFilterBlur();
-      // }
-
-      //input.value = fixedFieldValues[item.field] ?? '';
       input.addEventListener('blur', (e) => {
         const val = (e.currentTarget as HTMLInputElement).value;
-        //setFixedFieldValues((prev) => ({ ...prev, [item.field]: val }));
         createOrUpdateFieldFilterData(item.field, operator, operatorText, val);
       });
       div.appendChild(input);
       addedTd.appendChild(div);
     });
   };
-
-  // const onFixedFieldFilterBlur = (fieldName:string, operator:string, value:string) => {
-
-  // }
-
   // 根据几个全局的 map, 生成 logsQL 语句
   const generateLogsQL = () => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
@@ -242,9 +220,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       // 检查是否有额外的 stream filter 配置
       if ((jsonConfigRef.current?.extra_stream_filter?.length ?? 0) > 0) {
         const extra_stream_filter = jsonConfigRef.current?.extra_stream_filter;
-        // for (let index=0; index<(extra_stream_filter?.length??0); index++){
-        //   const item = extra_stream_filter?[index];
-        // }
         extra_stream_filter?.forEach((item) => {
           const joinField = item?.if_exists?.field ?? "";
           if (!(joinField in fieldFiltersRef.current)) {
@@ -356,7 +331,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       sb.append('* ');
     }
     // 输出字段
-    //alert(outputFieldMode);
     const isAllField = getOutputFieldChooseMode();
     const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
     if (!isAllField && txtFieldsList && txtFieldsList.value.length > 0) {
@@ -420,11 +394,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   // 选择的时间范围变更的时候，响应这个事件
   const onTimeRangeChange = (tr?: TimeRange) => {
-    // const startStr = tr?.from?.toISOString();
-    // const endStr = tr?.to?.toISOString();
-    // // placeholder: react to time range change without resetting form state
-    // console.info('time range changed', startStr, endStr);
-    generateLogsQL();
+     generateLogsQL();
   };
 
   const onDynamicFieldSelectChange = async (value?: string | null) => {
@@ -432,7 +402,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // todo: 拉 n 个值，猜测数据类型
     const uid = await resolveDatasourceUid();
     if (!uid) {
-      // eslint-disable-next-line no-console
       console.error('field_values: datasource uid not found');
       return;
     }
@@ -452,7 +421,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         });
       console.info('field_values isAllNumber', isAllNumber);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('field_values error', err);
     }
   };
@@ -495,10 +463,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       delete fieldFiltersRef.current[fieldName];
     }
-    // if (textarea) {
-    //   textarea.value = `field: ${fieldVal}\noperator: ${operatorVal}\nvalue: ${valueVal}`;
-    // }
-
     generateLogsQL();
   }
 
@@ -533,12 +497,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   const onFilterByStreamFieldsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setFilterByStreamFields(event.currentTarget.checked);
-    // if (!event.currentTarget.checked){
-    //   const opts: Option[] = Object.keys(fieldsLastTimeRef.current).map((k: string) => ({ label: k, value: k }));
-    //   setFieldSelectorDynamicOptions(opts);
-    //   setFieldSelectorDynamicValue(null);
-    //   return;
-    // }
     loadFieldNamesByStreamFields();
   };
 
@@ -588,19 +546,11 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const body = {
       queries: [
         {
-          //refId: 'log-volume-A',
           datasource: { type: 'victoriametrics-logs-datasource', uid: datasourceUid },
-          //editorMode: 'code',
           expr: query,
           queryType: 'hits',
           maxLines: 100,
           step: '1d',
-          // fields: [],
-          // supportingQueryType: 'logsVolume',
-          // legendFormat: '',
-          // datasourceId: 0,
-          // intervalMs: 0,
-          // maxDataPoints: 0,
         },
       ],
       from: String(startTs), // 单位确实是毫秒
@@ -650,16 +600,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         setTestResult(err?.statusText ?? '');
         setTestError(err?.data?.results?.A?.error ?? '');
       });
-
-    // .catch((err) => {
-    //   setTestResult('LogsQL test error');
-    //   try {
-    //     const parsed = (err as any)?.response?.data?.results?.A?.error ?? '';
-    //     setTestError(String(parsed));
-    //   } catch {
-    //     setTestError(String(err));
-    //   }
-    // });
   };
 
   // 当输入正则表达式变化时
@@ -676,7 +616,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const loadFieldNamesByStreamFields = async () => {
     const uid = await resolveDatasourceUid();
     if (!uid) {
-      // eslint-disable-next-line no-console
       console.error('loadFFieldNamesByStreamFields: datasource uid not found');
       return;
     }
@@ -737,7 +676,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       fieldsAfterStreamFilterRef.current = temp;
       setFieldSelectorDynamicOptions(opts);
       setFieldSelectorDynamicValue(null);
-      //setTestResult(JSON.stringify(fieldsAfterStreamFilterRef.current));
     } catch (err) {
       console.error('loadFFieldNamesByStreamFields error', err);
     }
@@ -765,7 +703,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         return uid;
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('resolveDatasourceUid: failed to list datasources', err);
     }
 
@@ -811,7 +748,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
     const uid = await resolveDatasourceUid();
     if (!uid) {
-      // eslint-disable-next-line no-console
       console.error('stream_field_names: datasource uid not found for input change');
       return;
     }
@@ -838,17 +774,14 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         renderValueSelectForWrapper(source, options, operator, streamField);
       }
 
-      // eslint-disable-next-line no-console
-      console.log('stream_field_values input from', source, resp);
+       console.log('stream_field_values input from', source, resp);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('stream_field_names input change error', err);
     }
   };
 
   // 选择 stream field 的 operator 变更事件
   const on_operator_change = async (selectEl: HTMLSelectElement, valueCell?: HTMLElement | null) => {
-    // eslint-disable-next-line no-console
     const value = selectEl.value;
     console.log('onchange select', value);
     let jsonData: any;
@@ -928,16 +861,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
     const uid = await resolveDatasourceUid();
     if (!uid) {
-      // eslint-disable-next-line no-console
       console.error('stream_field_values: datasource uid not found');
       return;
     }
-    //setTestResult("735");
-    //
     let queryStr: string = '*';
     if (cascadeFiltering) {
-      //setTestResult("739");
-      if (index > 0 && index < Object.keys(streamFieldIndexMapRef.current).length) {
+       if (index > 0 && index < Object.keys(streamFieldIndexMapRef.current).length) {
         const sb = createStringBuilder();
         const streamFilters = streamFiltersRef.current;
         for (let idx = 0; idx < index; idx++) {
@@ -946,7 +875,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
             // 上一级字段根本没选，跳过
             continue;
           }
-          //setTestResult("739:" + String(idx));
           const filter = streamFilters[streamFieldName];
           sb.append(JSON.stringify(streamFieldName));
           switch (filter.operator) {
@@ -975,8 +903,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (queryStr.trim() === '') {
       queryStr = '*';
     }
-    //setTestResult("775:"+queryStr);
-    //try {
     const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`, {
       field: streamField,
       query: queryStr,
@@ -984,20 +910,14 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       end: '',
       limit: '50',
     });
-    //setTestResult("787");
     const options =
       Array.isArray(resp?.values) && resp.values.length
         ? resp.values.map((item: any) => ({ label: item?.value ?? '', value: item?.value ?? '' }))
         : [];
     renderValueSelectForWrapper(wrapper, options, operator, streamField);
-    // } catch (err) {
-    //   // eslint-disable-next-line no-console
-    //   console.error('stream_field_values error', err);
-    // }
   };
 
   const each_stream_feild = (stream_field_name: string, hits: number, index: number) => {
-    // eslint-disable-next-line no-console
     console.log('each_stream_feild', stream_field_name, hits);
     const tbody = document.getElementById('stream_filter_tbody') as HTMLTableSectionElement | null;
     if (!tbody) {
@@ -1105,29 +1025,13 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     varName[varKey] = logsql;
     locationService.partial(varName, true);
     setTestResult('Query applied and dashboard refresh triggered');
-    // const url = new URL(window.location.href);
-    // url.searchParams.set('var-logsql', logsql);
-    // window.history.replaceState({}, '', url.toString());
-
-    // try {
-    //   const appEvents = getAppEvents();
-    //   // trigger dashboard variable refresh + panel reload
-    //   appEvents.publish({ type: 'dashboards-refresh' } as any);
-    //   appEvents.publish({ type: 'refresh' } as any);
-    //   setTestResult('Query applied and dashboard refresh triggered');
-    // } catch (err) {
-    //   setTestError('Failed to trigger dashboard refresh');
-    //   console.error('dashboard refresh error', err);
-    // }
   };
 
-  // run once on mount; avoid re-running/clearing form state on time range change
   useEffect(() => {
     const fetchSreamFields = async () => {
       const uid = await resolveDatasourceUid();
 
       if (!uid) {
-        // eslint-disable-next-line no-console
         console.error('stream_field_names: datasource uid not found');
         return;
       }
@@ -1135,8 +1039,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_names`;
       const payload = {
         query: '*',
-        //start: String(start*1000),
-        //end: String(end*1000),
         start: '',
         end: '',
         limit: String(100),
@@ -1144,27 +1046,21 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
       try {
         const resp = await getBackendSrv().post(path, payload);
-        // eslint-disable-next-line no-console
         console.log('stream_field_names', resp);
-        //alert(1);
         on_stream_field_names_response(resp);
         // 查询到 stream field 后，再调用 fetchFields();
         console.info('stream_field_names:', resp);
         fetchFields(resp);
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.error('stream_field_names error', err);
       }
     };
 
     // 拉取普通的 field 的 name
     const fetchFields = async (streamFields: any) => {
-      //alert(2);
       console.info('stream_field_names:', streamFields);
       const uid = await resolveDatasourceUid();
       if (!uid) {
-        // eslint-disable-next-line no-console
-        //alert(3);
         console.error('field_names: datasource uid not found');
         return;
       }
@@ -1178,8 +1074,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         });
         handleFieldNamesResponse(streamFields, resp);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        //alert(4);
         console.error('field_names error', err);
       }
     };
@@ -1196,7 +1090,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   // 第一次加载 feild names
   const handleFieldNamesResponse = (streamFields: any, resp: any) => {
-    //alert(5);
     console.info('stream_field_names:', streamFields);
     const streamFieldMap: Record<string, null> = {};
     if (Array.isArray(streamFields?.values)) {
@@ -1224,7 +1117,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           return;
         }
         fieldMap[key] = null;
-        //fieldsLastTimeRef.current[key] = null; // 记录第一次读到的字段，减少后续的加载
       });
     }
     fieldMapRef.current = fieldMap;
@@ -1240,11 +1132,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   const getOutputFieldChooseMode = (): boolean => {
-    // const radioButAll = document.getElementById('radioOutputAllFields') as HTMLInputElement | null;
-    // if (radioButAll) {
-    //   return radioButAll.checked;
-    // }
-    // return true;
     return outputAllFields;
   }
 
@@ -1255,10 +1142,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     container.style.display = "none";
-    // const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
-    // if (txtFieldsList) {
-    //   txtFieldsList.value = '';
-    // }
     generateLogsQL();
   };
 
@@ -1269,7 +1152,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     container.style.display = "block";
-    //container.innerHTML = '';
     let m = fieldsAfterStreamFilterRef.current;
     if (Object.keys(m).length == 0) {
       m = fieldMapRef.current;
@@ -1324,7 +1206,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       onRadioButtonChooseFields();
     }
-    //setTestResult(JSON.stringify(next));
   };
 
   return (
@@ -1488,7 +1369,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                           checked={limitEnabled}
                           onChange={(e) => {
                             setLimitEnabled(e.currentTarget.checked);
-                            //generateLogsQL();
                           }}
                         />
                         <span>limit:</span>
@@ -1496,7 +1376,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                           type="number"
                           value={limitValue}
                           onChange={(e) => setLimitValue(e.currentTarget.value)}
-                          //onBlur={() => generateLogsQL()}
                           style={{ width: '80px' }}
                         />
                       </div>
