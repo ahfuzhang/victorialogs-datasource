@@ -183,12 +183,14 @@ docker_run:
 		-v ./plugins/victoriametrics-logs-datasource/panels/log-filter/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
 		grafana/grafana:12.1
 
-# make local-build PKG_TAG=v0.1.1
+# make local-build PKG_TAG=v0.1.2
 local-build: build_golang
 	yarn build && \
 	mkdir -p dist && \
 	$(eval PACKAGE_NAME := $(PLUGIN_ID)-$(PKG_TAG)) \
 	cd plugins/ && \
+	mkdir -p victoriametrics-logfilter-panel && \
+	mv victoriametrics-logs-datasource/panels/log-filter/* ./victoriametrics-logfilter-panel/ && \
 	tar -czf ../dist/$(PACKAGE_NAME).tar.gz ./$(PLUGIN_ID) && \
 	zip -q -r ../dist/$(PACKAGE_NAME).zip ./$(PLUGIN_ID) && \
 	cd - && \
@@ -201,11 +203,12 @@ install-gh:
 gh-login:
 	gh auth login
 
+# make gh-upload PKG_TAG=v0.1.2
 gh-upload:
-	gh release create v0.1.1 \
-		dist/victoriametrics-logs-datasource-v0.1.1.tar.gz \
-		dist/victoriametrics-logs-datasource-v0.1.1.zip \
-		dist/victoriametrics-logs-datasource-v0.1.1_checksums_tar.gz.txt \
-		dist/victoriametrics-logs-datasource-v0.1.1_checksums_zip.txt \
-		--title "v0.1.1" \
+	gh release create $(PKG_TAG) \
+		dist/victoriametrics-logs-datasource-$(PKG_TAG).tar.gz \
+		dist/victoriametrics-logs-datasource-$(PKG_TAG).zip \
+		dist/victoriametrics-logs-datasource-$(PKG_TAG)_checksums_tar.gz.txt \
+		dist/victoriametrics-logs-datasource-$(PKG_TAG)_checksums_zip.txt \
+		--title "$(PKG_TAG)" \
 		--notes "victoriametrics-logs-datasource, with log-filter panel"
