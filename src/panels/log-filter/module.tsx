@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { PanelPlugin, type PanelProps, type TimeRange } from '@grafana/data';
-import { Combobox, Select, TextArea } from '@grafana/ui';
+import { Combobox, Select, Switch, TextArea } from '@grafana/ui';
 import { getBackendSrv } from '@grafana/runtime';
 import { locationService } from '@grafana/runtime';
 
@@ -79,9 +79,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const [limitValue, setLimitValue] = useState<string>('100');
   const [cascadeFiltering, setCascadeFiltering] = useState<boolean>(true);
   const [jsonConfig, setJsonConfig] = useState<string>(options?.jsonConfig ?? '');
-  const [outputFieldMode, setOutputFieldMode] = useState<'all' | 'choose'>('all');
-  //const [selectedOutputFields, setSelectedOutputFields] = useState<Record<string, boolean>>({});
-  const [outputPreview, setOutputPreview] = useState<string>('');
+  //const [outputFieldMode, setOutputFieldMode] = useState<'all' | 'choose'>('all');
+  //const [outputPreview, setOutputPreview] = useState<string>('');
+  const [outputAllFields, setOutputAllFields] = useState<boolean>(true);
 
   const onFullTextSearchBlur = (val: string) => {
     const op = fullTextSearchOperator ?? '';
@@ -356,9 +356,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       sb.append('* ');
     }
     // 输出字段
-    if (outputFieldMode==="choose" && outputPreview.length>0){
+    //alert(outputFieldMode);
+    const isAllField = getOutputFieldChooseMode();
+    const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
+    if (!isAllField && txtFieldsList && txtFieldsList.value.length > 0) {
       sb.append('| fields ')
-      sb.append(outputPreview)
+      sb.append(tidyOutputFields(txtFieldsList.value).join(', '));
       sb.append(' ')
     }
     // limit 配置
@@ -727,7 +730,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           .sort()
         : [];
       const opts: Option[] = keys.map((k: string) => ({ label: k, value: k }));
-      let temp : Record<string, any> = {};
+      let temp: Record<string, any> = {};
       keys.forEach((item: string) => {
         temp[item] = null;
       });
@@ -1236,14 +1239,27 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     setFieldSelectorDynamicValue(null);
   };
 
+  const getOutputFieldChooseMode = (): boolean => {
+    // const radioButAll = document.getElementById('radioOutputAllFields') as HTMLInputElement | null;
+    // if (radioButAll) {
+    //   return radioButAll.checked;
+    // }
+    // return true;
+    return outputAllFields;
+  }
+
   // 点击显示全部字段的按钮
-  const onRadioButtonAllFields = () => { 
+  const onRadioButtonAllFields = () => {
     const container = document.getElementById('chooseOutputFieldsContainer');
     if (!container) {
       return;
     }
     container.style.display = "none";
-    setOutputPreview('');
+    // const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
+    // if (txtFieldsList) {
+    //   txtFieldsList.value = '';
+    // }
+    generateLogsQL();
   };
 
   // 点击选择字段的按钮
@@ -1258,27 +1274,57 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (Object.keys(m).length == 0) {
       m = fieldMapRef.current;
     }
-    setOutputPreview(Object.keys(m).join(','));
-    // const keys = Object.keys(fieldsLastTimeRef.current ?? {}).sort();
-    // keys.forEach((key) => {
-    //   const label = document.createElement('label');
-    //   label.style.display = 'inline-flex';
-    //   label.style.alignItems = 'center';
-    //   label.style.gap = '4px';
-    //   label.style.marginRight = '8px';
-    //   const checkbox = document.createElement('input');
-    //   checkbox.type = 'checkbox';
-    //   checkbox.checked = selectedOutputFields[key] ?? true;
-    //   checkbox.addEventListener('change', (e) => {
-    //     const checked = (e.currentTarget as HTMLInputElement).checked;
-    //     setSelectedOutputFields((prev) => ({ ...prev, [key]: checked }));
-    //   });
-    //   label.appendChild(checkbox);
-    //   const span = document.createElement('span');
-    //   span.textContent = key;
-    //   label.appendChild(span);
-    //   container.appendChild(label);
-    // });
+    const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
+    if (txtFieldsList) {
+      txtFieldsList.value = '_msg, ' + Object.keys(m).join(', ');
+    }
+    generateLogsQL();
+  };
+
+  const onClickMultiLineButton = () => {
+    const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
+    if (txtFieldsList) {
+      txtFieldsList.value = tidyOutputFields(txtFieldsList?.value ?? '').join('\n');
+    }
+  }
+
+  const onClickSingleLineButton = () => {
+    const txtFieldsList = document.getElementById('txtOutputFieldsList') as HTMLTextAreaElement | null;
+    if (txtFieldsList) {
+      txtFieldsList.value = tidyOutputFields(txtFieldsList?.value ?? '').join(', ');
+    }
+  }
+
+  const tidyOutputFields = (s: string): string[] => {
+    let arr = s.split('\n');
+    arr = arr.map((s) => s.trim());
+    let arr2 = [];
+    for (let i = 0; i < arr.length; i++) {
+      let item = arr[i];
+      if (item.includes(',')) {
+        const temp = item.split(',').map((s) => s.trim());
+        for (let j = 0; j < temp.length; j++) {
+          if (temp[j] !== '') {
+            arr2.push(temp[j]);
+          }
+        }
+        continue;
+      }
+      if (item === '') {
+        continue;
+      }
+      arr2.push(arr[i]);
+    }
+    return arr2.sort();
+  }
+
+  const outputAllFieldsOnChange = (next: boolean) => {
+    if (next) {
+      onRadioButtonAllFields();
+    } else {
+      onRadioButtonChooseFields();
+    }
+    //setTestResult(JSON.stringify(next));
   };
 
   return (
@@ -1460,38 +1506,40 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     <td>Output fields:</td>
                     <td>
                       <div style={{ marginTop: '6px', display: 'inline-flex', gap: '12px', alignItems: 'center' }}>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <input
-                            type="radio"
-                            name="outputFieldMode"
-                            checked={outputFieldMode === 'all'}
-                            onChange={() => {
-                              setOutputFieldMode('all');
-                              onRadioButtonAllFields();
-                            }}
-                          />
-                          All
-                        </label>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <input
-                            type="radio"
-                            name="outputFieldMode"
-                            checked={outputFieldMode === 'choose'}
-                            onChange={() => {
-                              setOutputFieldMode('choose');
-                              onRadioButtonChooseFields();
-                            }}
-                          />
-                          Choose output fields
-                        </label>
+                        <Switch
+                          value={outputAllFields}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            const next = e.currentTarget.checked;
+                            setOutputAllFields(next);
+                            outputAllFieldsOnChange(next);
+                          }}
+                        />
+                        <span>Output all fields</span>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClickSingleLineButton();
+                          }}
+                        >
+                          one line
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClickMultiLineButton();
+                          }}
+                        >
+                          multi line
+                        </button>
+
                       </div>
                       <div id="chooseOutputFieldsContainer" style={{ display: 'none' }}>
                         <TextArea
                           aria-label="Output preview"
-                          style={{ width: '100%', height: '100%' }}
-                          value={outputPreview}
-                          onChange={(e) => {
-                            setOutputPreview(e.currentTarget.value);
+                          style={{ width: '100%', height: '150px' }}
+                          id="txtOutputFieldsList"
+                          onBlur={(e) => {
                             generateLogsQL();
                           }}
                         />
