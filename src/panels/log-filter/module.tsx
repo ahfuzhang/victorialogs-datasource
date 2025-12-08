@@ -63,6 +63,8 @@ const sysFields: Record<string, null> = {
   _time: null,
 };
 
+const defaultRecordCount:number = 50;
+
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data, options }) => {
   const showLogsqlTextarea = options?.showLogsqlTextarea ?? true;
   const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
@@ -79,6 +81,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const [cascadeFiltering, setCascadeFiltering] = useState<boolean>(true);
   const [jsonConfig, setJsonConfig] = useState<string>(options?.jsonConfig ?? '');
   const [outputAllFields, setOutputAllFields] = useState<boolean>(true);
+  const getTimeRangeMillis = () => ({
+    start: timeRangeRef.current?.from?.valueOf(),
+    end: timeRangeRef.current?.to?.valueOf(),
+  });
   const [testResult, setTestResult] = useState<string>('');
   const [testError, setTestError] = useState<string>('');
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
@@ -405,11 +411,13 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       console.error('field_values: datasource uid not found');
       return;
     }
+    const { start, end } = getTimeRangeMillis();
     try {
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_values`, {
         query: '*',
-        start: '1d',
-        limit: '50',
+        start: String(start),
+        end: String(end),
+        limit: `${defaultRecordCount}`,
         field: value,
       });
       const isAllNumber =
@@ -655,11 +663,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         });
       }
       const queryExpr = expressions.join(' '); // 表达式之间以空格分割
+      const { start, end } = getTimeRangeMillis();
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
         query: queryExpr,
-        start: '',
-        end: '',
-        limit: '50',
+        start: String(start),
+        end: String(end),
+        limit: `${defaultRecordCount}`,
       });
 
       const keys = Array.isArray(resp?.values)
@@ -752,13 +761,14 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
 
+    const { start, end } = getTimeRangeMillis();
     const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`;
     const payload = {
       field: streamField,
       query: `${streamField}:~\".*${val}.*\"`,
-      limit: '50',
-      start: '',
-      end: '',
+      limit: `${defaultRecordCount}`,
+      start: String(start),
+      end: String(end),
     };
 
     try {
@@ -903,12 +913,13 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (queryStr.trim() === '') {
       queryStr = '*';
     }
+    const { start, end } = getTimeRangeMillis();
     const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`, {
       field: streamField,
       query: queryStr,
-      start: '',
-      end: '',
-      limit: '50',
+      start: String(start),
+      end: String(end),
+      limit: `${defaultRecordCount}`,
     });
     const options =
       Array.isArray(resp?.values) && resp.values.length
@@ -1037,11 +1048,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
 
       const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_names`;
+      const { start, end } = getTimeRangeMillis();
       const payload = {
         query: '*',
-        start: '',
-        end: '',
-        limit: String(100),
+        start: String(start),
+        end: String(end),
+        limit: `${defaultRecordCount}`,
       };
 
       try {
@@ -1066,11 +1078,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
 
       try {
+        const { start, end } = getTimeRangeMillis();
         const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
           query: '*',
-          start: '',
-          end: '',
-          limit: '50',
+          start: String(start),
+          end: String(end),
+          limit: `${defaultRecordCount}`,
         });
         handleFieldNamesResponse(streamFields, resp);
       } catch (err) {
