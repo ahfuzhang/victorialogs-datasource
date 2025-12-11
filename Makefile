@@ -215,7 +215,7 @@ local-build: build_golang
 	sha1sum dist/$(PACKAGE_NAME).zip > dist/$(PACKAGE_NAME)_checksums_zip.txt && \
 	sha1sum dist/$(PACKAGE_NAME).tar.gz > dist/$(PACKAGE_NAME)_checksums_tar.gz.txt
 
-# make local-build-panel PLUGIN_ID=victoriametrics-logfilter-panel PKG_TAG=v0.1.5
+# make local-build-panel PLUGIN_ID=victoriametrics-logfilter-panel PKG_TAG=v0.1.7
 local-build-panel:
 	yarn build && \
 	mkdir -p dist && \
@@ -245,7 +245,7 @@ gh-upload:
 		--title "$(PKG_TAG)" \
 		--notes "victoriametrics-logs-datasource, with log-filter panel"
 
-# make gh-upload-panel PLUGIN_ID=victoriametrics-logfilter-panel PKG_TAG=v0.1.5
+# make gh-upload-panel PLUGIN_ID=victoriametrics-logfilter-panel PKG_TAG=v0.1.7
 gh-upload-panel:
 	gh release create $(PKG_TAG) \
 		dist/$(PLUGIN_ID)-$(PKG_TAG).tar.gz \
