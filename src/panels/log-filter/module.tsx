@@ -412,7 +412,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     try {
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_values`, {
         query: '*',
-        // start: String(start),
+        start: getStartRange(),
         // end: String(end),
         limit: `${defaultRecordCount}`,
         field: value,
@@ -663,7 +663,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       //const { start, end } = getTimeRangeMillis();
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
         query: queryExpr,
-        // start: String(start),
+        start: getStartRange(),
         // end: String(end),
         limit: `${defaultRecordCount}`,
       });
@@ -775,7 +775,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       field: streamField,
       query: `${streamField}:~\".*${val}.*\"`,
       limit: `${defaultRecordCount}`,
-      // start: String(start),
+      start: getStartRange(),
       // end: String(end),
     };
 
@@ -925,7 +925,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`, {
       field: streamField,
       query: queryStr,
-      // start: String(start),
+      start: getStartRange(),
       // end: String(end),
       limit: `${defaultRecordCount}`,
     });
@@ -1061,6 +1061,22 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     setTestResult('Query applied and dashboard refresh triggered');
   };
 
+  const getStartRange = () => {
+    const from = timeRangeRef.current?.from?.valueOf();
+    if (!Number.isFinite(from)) {
+      return '1d';
+    }
+
+    const startDate = new Date(from as number);
+    startDate.setHours(0, 0, 0, 0);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const diffDays = Math.round((startOfToday.getTime() - startDate.getTime()) / msPerDay);
+    const days = diffDays + 1; // today => 1d, yesterday => 2d, etc.
+    return `${Math.max(days, 1)}d`;
+  };
+
   const loadPanelData = async () => {
     const uid = await resolveDatasourceUid();
 
@@ -1072,7 +1088,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_names`;
     const payload = {
       query: '*',
-      // start: String(start),
+      start: getStartRange(),
       // end: String(end),
       limit: `${defaultRecordCount}`,
     };
@@ -1085,7 +1101,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       // 加载所有的 field names
       const fieldNames = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
         query: '*',
-        // start: String(start),
+        start: getStartRange(),
         // end: String(end),
         limit: `${defaultRecordCount}`,
       });
