@@ -413,7 +413,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_values`, {
         query: '*',
         start: getStartRange(),
-        // end: String(end),
+        end: 'now',
         limit: `${defaultRecordCount}`,
         field: value,
       });
@@ -664,7 +664,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
         query: queryExpr,
         start: getStartRange(),
-        // end: String(end),
+        end: 'now',
         limit: `${defaultRecordCount}`,
       });
 
@@ -776,7 +776,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       query: `${streamField}:~\".*${val}.*\"`,
       limit: `${defaultRecordCount}`,
       start: getStartRange(),
-      // end: String(end),
+      end: 'now',
     };
 
     try {
@@ -926,7 +926,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       field: streamField,
       query: queryStr,
       start: getStartRange(),
-      // end: String(end),
+      end: 'now',
       limit: `${defaultRecordCount}`,
     });
     const options =
@@ -1089,7 +1089,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const payload = {
       query: '*',
       start: getStartRange(),
-      // end: String(end),
+      end: 'now',
       limit: `${defaultRecordCount}`,
     };
 
@@ -1102,7 +1102,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const fieldNames = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
         query: '*',
         start: getStartRange(),
-        // end: String(end),
+        end: 'now',
         limit: `${defaultRecordCount}`,
       });
       handleFieldNamesResponse(streamFields, fieldNames);
