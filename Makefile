@@ -156,6 +156,10 @@ front:
 	yarn build
 	# yarn build --env development
 
+build-frontend:
+	yarn build --env development && \
+	cp ./plugins/victoriametrics-logs-datasource/panels/log-filter/* ./plugins/victoriametrics-logfilter-panel/
+
 docker_pull:
 	docker pull grafana/grafana:12.1
 
@@ -180,7 +184,7 @@ docker_run:
 		-v ./test/config/:/etc/grafana \
 		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
 		-v ./test/datasources/:/etc/grafana/provisioning/datasources/ \
-		-v ./plugins/victoriametrics-logs-datasource/panels/log-filter/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
+		-v ./plugins/victoriametrics-logfilter-panel/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
 		grafana/grafana:12.1
 
 docker_run_for_download:
