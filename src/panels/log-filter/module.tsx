@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-
 import { PanelEvents, PanelPlugin, type PanelProps, type TimeRange } from '@grafana/data';
 import { Combobox, Select, Switch, TextArea } from '@grafana/ui';
-import { getBackendSrv } from '@grafana/runtime';
-import { locationService } from '@grafana/runtime';
+import { getBackendSrv, locationService } from '@grafana/runtime';
+
 
 interface LogFilterOptions {
   showLogsqlTextarea?: boolean;
@@ -63,16 +62,18 @@ const sysFields: Record<string, null> = {
   _time: null,
 };
 
+const operatorMap: Record<string, string> = {
+  '=': ':xxx',
+  '!=': ':!xxx',
+  '=~': ':~xxx',
+  '!~': ':!~xxx',
+};
+
 const defaultRecordCount = 50;
 
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data, options, eventBus }) => {
   const showLogsqlTextarea = options?.showLogsqlTextarea ?? true;
   const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
-  const [fieldSelectorDynamicValue, setFieldSelectorDynamicValue] = useState<string | null>(null);
-  const [fieldSelectorDynamicOptions, setFieldSelectorDynamicOptions] = useState<Option[]>([]);
-  const [fieldOperatorDynamicValue, setFieldOperatorDynamicValue] = useState<string | null>(null);
-  const [fieldOperatorDynamicOptions] = useState<Option[]>([]);
-  const [fieldValueDynamic, setFieldValueDynamic] = useState<string>('');
   const [fullTextSearch, setFullTextSearch] = useState<string>('');
   const [fullTextSearchOperator, setFullTextSearchOperator] = useState<string | null>(null);
   const [messageValue, setMessageValue] = useState<string>('');
@@ -117,6 +118,23 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // { label: ':eq_field (equal a field)', value: ':eq_field($field)' },
     // { label: ':lt_field (less than a field)', value: ':lt_field($field)' },
   ];
+
+  // 设置一个 select 控件的选项
+  const setSelectOptions = (id: string, options: Option[]) => {
+    const select = document.getElementById(id) as HTMLSelectElement | null;
+    if (!select) {
+      return;
+    }
+    while (select.options.length > 0) {
+      select.remove(select.options.length - 1);
+    }
+    for (const option of options) {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      select.appendChild(opt);
+    }
+  }
 
   const onFullTextSearchBlur = (val: string) => {
     const op = fullTextSearchOperator ?? '';
@@ -165,7 +183,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const div = document.createElement('div');
       const span = document.createElement('span');
       let text = item?.text ?? "";
-      if (text.length == 0) {
+      if (text.length === 0) {
         text = (item?.field ?? '') + ': ';
       }
       span.textContent = text;
@@ -189,6 +207,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       addedTd.appendChild(div);
     });
   };
+
   // 根据几个全局的 map, 生成 logsQL 语句
   const generateLogsQL = () => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
@@ -326,10 +345,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
     }
     if (
-      Object.keys(streamFilters).length == 0 &&
-      Object.keys(fieldFilters).length == 0 &&
-      Object.keys(msgFiltersRef.current).length == 0 &&
-      Object.keys(fulltextFiltersRef.current).length == 0
+      Object.keys(streamFilters).length === 0 &&
+      Object.keys(fieldFilters).length === 0 &&
+      Object.keys(msgFiltersRef.current).length === 0 &&
+      Object.keys(fulltextFiltersRef.current).length === 0
     ) {
       sb.append('* ');
     }
@@ -397,42 +416,41 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   // 选择的时间范围变更的时候，响应这个事件
   const onTimeRangeChange = (tr?: TimeRange) => {
-     generateLogsQL();
+    generateLogsQL();
   };
 
-  const onDynamicFieldSelectChange = async (value?: string | null) => {
-    setFieldSelectorDynamicValue(value ?? null);
-    // todo: 拉 n 个值，猜测数据类型
+  const loadFieldValues = async (fieldName: string, match: string): Promise<string[]> => {
     const uid = await resolveDatasourceUid();
     if (!uid) {
       console.error('field_values: datasource uid not found');
-      return;
+      return [];
     }
-    //const { start, end } = getTimeRangeMillis();
+    let postData = {
+      query: '*',
+      start: getStartRange(),
+      end: 'now',
+      limit: `${defaultRecordCount}`,
+      field: fieldName,
+    };
+    if (match && match.length > 0) {
+      postData.query = `${fieldName}:*${JSON.stringify(match)}*`;
+    }
     try {
-      const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_values`, {
-        query: '*',
-        start: getStartRange(),
-        end: 'now',
-        limit: `${defaultRecordCount}`,
-        field: value,
-      });
-      const isAllNumber =
-        Array.isArray(resp?.values) &&
-        resp.values.every((item: any) => {
-          const v = item?.value;
-          const n = Number(v);
-          return Number.isFinite(n);
-        });
-      console.info('field_values isAllNumber', isAllNumber);
-    } catch (err) {
-      console.error('field_values error', err);
+      const resp = await getBackendSrv().post(
+        `/api/datasources/uid/${uid}/resources/select/logsql/field_values`,
+        postData
+      );
+      if (Array.isArray(resp?.values)) {
+        return resp.values.filter(
+          (item: any) => item?.value !== null && item?.value !== undefined && String(item?.value).length > 0
+        ).map((item: any) => item?.value);
+      }
+      return [];
+    } catch (err: any) {
+      setTestError(err?.statusText ?? '');
+      return [];
     }
-  };
-
-  const onDynamicFieldOperatorChange = (value?: string | null) => {
-    setFieldOperatorDynamicValue(value ?? null);
-  };
+  }
 
   const createOrUpdateFieldFilterData = (fieldName: string,
     operator: string, operatorText: string, value: string) => {
@@ -471,20 +489,35 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     generateLogsQL();
   }
 
-  // 点击 add 按钮
-  const onAddFieldFilterClick = () => {
-    const fieldVal = fieldSelectorDynamicValue ?? '';
-    const operatorVal = fieldOperatorDynamicValue ?? '';
-    const valueVal = fieldValueDynamic ?? '';
-    if (!fieldVal || !operatorVal || !valueVal) {
+  const addFieldFilter = () => {
+    const fieldNameInput = document.getElementById('textboxForFieldNames') as HTMLInputElement | null;
+    if (!fieldNameInput) {
       return;
     }
-    const operatorText =
-      fieldOperatorDynamicOptions.find((o) => o.value === operatorVal)?.label ??
-      defaultFieldOperatorOptions.find((o) => o.value === operatorVal)?.label ??
-      operatorVal;
-    createOrUpdateFieldFilterData(fieldVal, operatorVal, operatorText, valueVal);
+    const fieldName = fieldNameInput.value.trim();
+    if (fieldName.length === 0) {
+      return;
+    }
+    const selForOperator = document.getElementById('selForFieldOperator') as HTMLSelectElement | null;
+    if (!selForOperator) {
+      return;
+    }
+    if (selForOperator.selectedIndex < 0) {
+      return;
+    }
+    const operator = selForOperator.value;
+    const operatorText = selForOperator.options.item(selForOperator.options.selectedIndex)?.text ?? '';
+    const textboxForFieldValue = document.getElementById('textboxForFieldValues') as HTMLInputElement | null;
+    if (!textboxForFieldValue) {
+      return;
+    }
+    const fieldValue = textboxForFieldValue.value.trim();
+    if (fieldValue.length === 0) { 
+      return;
+    }
+    createOrUpdateFieldFilterData(fieldName, operator, operatorText, fieldValue);
   };
+
   const fullTextSearchOptions: Option[] = [
     { label: '(word/phrase)', value: 'xxx' },
     { label: '= (equal)', value: '=xxx' },
@@ -619,11 +652,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
   // stream filter 变更后，加载 field names
   const loadFieldNamesByStreamFields = async () => {
-    const uid = await resolveDatasourceUid();
-    if (!uid) {
-      console.error('loadFFieldNamesByStreamFields: datasource uid not found');
-      return;
-    }
     const chkUseStreamFilter = document.getElementById('chkUseStreamFilter') as HTMLInputElement | null;
     const useStreamFilter = chkUseStreamFilter?.checked ?? false;
     if (!useStreamFilter) {
@@ -631,60 +659,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const opts: Option[] = Object.keys(fieldMapRef.current)
         .sort()
         .map((k: string) => ({ label: k, value: k }));
-      setFieldSelectorDynamicOptions(opts);
-      setFieldSelectorDynamicValue(null);
+      setSelectOptions("htmlSelectForFieldNames", opts);
       return;
     }
-    try {
-      const operatorMap: Record<string, string> = {
-        '=': ':xxx',
-        '!=': ':!xxx',
-        '=~': ':~xxx',
-        '!~': ':!~xxx',
-      };
-      const filters = streamFiltersRef.current;
-      const expressions: string[] = [];
-
-      if (Object.keys(filters).length === 0) {
-        expressions.push('*');
-      } else {
-        Object.keys(filters).forEach((key) => {
-          const op = filters[key]?.operator ?? '';
-          const val = filters[key]?.value ?? '';
-          const mapped = operatorMap[op] ?? op;
-          if (mapped.includes('xxx')) {
-            expressions.push(`\"${key}\"${mapped.replace('xxx', JSON.stringify(val ?? ''))}`);
-          } else {
-            expressions.push(`\"${key}\"${mapped}${val}`);
-          }
-        });
-      }
-      const queryExpr = expressions.join(' '); // 表达式之间以空格分割
-      //const { start, end } = getTimeRangeMillis();
-      const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, {
-        query: queryExpr,
-        start: getStartRange(),
-        end: 'now',
-        limit: `${defaultRecordCount}`,
-      });
-
-      const keys = Array.isArray(resp?.values)
-        ? resp.values
-          .map((item: any) => item?.value ?? '')
-          .filter((k: string) => k !== '' && !(k in sysFields) && !(k in streamFieldMapRef.current))
-          .sort()
-        : [];
-      const opts: Option[] = keys.map((k: string) => ({ label: k, value: k }));
-      let temp: Record<string, any> = {};
-      keys.forEach((item: string) => {
-        temp[item] = null;
-      });
-      fieldsAfterStreamFilterRef.current = temp;
-      setFieldSelectorDynamicOptions(opts);
-      setFieldSelectorDynamicValue(null);
-    } catch (err) {
-      console.error('loadFFieldNamesByStreamFields error', err);
-    }
+    loadFieldNamesDynamic();
   };
 
   // 查询当前的数据源 id
@@ -739,7 +717,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       root = createRoot(wrapper);
       valueSelectRoots.set(wrapper, root);
     }
-
+    // stream field value 的选择控件
     root.render(
       <ValueSelect
         options={opts}
@@ -769,7 +747,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
 
-    //const { start, end } = getTimeRangeMillis();
     const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`;
     const payload = {
       field: streamField,
@@ -792,7 +769,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         renderValueSelectForWrapper(source, options, operator, streamField);
       }
 
-       console.log('stream_field_values input from', source, resp);
+      console.log('stream_field_values input from', source, resp);
     } catch (err) {
       console.error('stream_field_names input change error', err);
     }
@@ -882,9 +859,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       console.error('stream_field_values: datasource uid not found');
       return;
     }
-    let queryStr: string = '*';
+    let queryStr = '*';
     if (cascadeFiltering) {
-       if (index > 0 && index < Object.keys(streamFieldIndexMapRef.current).length) {
+      if (index > 0 && index < Object.keys(streamFieldIndexMapRef.current).length) {
         const sb = createStringBuilder();
         const streamFilters = streamFiltersRef.current;
         for (let idx = 0; idx < index; idx++) {
@@ -921,7 +898,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (queryStr.trim() === '') {
       queryStr = '*';
     }
-    //const { start, end } = getTimeRangeMillis();
     const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/stream_field_values`, {
       field: streamField,
       query: queryStr,
@@ -945,7 +921,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const tr = document.createElement('tr');
 
     const nameTd = document.createElement('td');
-    const nameWidth: number = 250;
+    const nameWidth = 250;
     nameTd.style.width = `${nameWidth}px`;
     nameTd.innerHTML = `
       <span style="display:inline-block;max-width:${nameWidth}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:${nameWidth}px;text-align:right;padding-right:3px;" title="hits:${hits}">
@@ -993,15 +969,15 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     const values = [...resp.values].sort((a: any, b: any) => {
-        const ka = String(a?.value ?? '');
-        const kb = String(b?.value ?? '');
-        return ka.localeCompare(kb);
-      });
+      const ka = String(a?.value ?? '');
+      const kb = String(b?.value ?? '');
+      return ka.localeCompare(kb);
+    });
     let m: Record<string, number> = {};
-      for (let index in resp.values) {
-        const item = resp.values[index];
-        m[item.value] = item.hits;
-      }  
+    for (let index in resp.values) {
+      const item = resp.values[index];
+      m[item.value] = item.hits;
+    }
     //
     const streamFieldList = options.streamFieldList ?? '';
     const shouldAutofill = streamFieldList.trim() === '';
@@ -1022,7 +998,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
     }
     // 当配置中有字段列表的时候，需要检查字段列表是否是当前查询得到的列表的子集。否则配置不生效
-    if (configedStreamFields.length===0) {
+    if (configedStreamFields.length === 0) {
       for (let index = 0; index < values.length; index++) {
         const item = values[index];
         streamFieldIndexMapRef.current[index] = item?.value;
@@ -1077,12 +1053,19 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     return `${Math.max(days, 1)}d`;
   };
 
+  // panel 加载的时候，填充各种数据
   const loadPanelData = async () => {
     const uid = await resolveDatasourceUid();
 
     if (!uid) {
       console.error('stream_field_names: datasource uid not found');
       return;
+    }
+    // 设置 field 的 operator 选项
+    setSelectOptions("selForFieldOperator", defaultFieldOperatorOptions);
+    const selForFieldOperator = document.getElementById('selForFieldOperator') as HTMLSelectElement | null;
+    if (selForFieldOperator) {
+      selForFieldOperator.options.selectedIndex = 0;
     }
     // 开始加载 stream field names
     const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_names`;
@@ -1122,9 +1105,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     onTimeRangeChange(timeRange);
   }, [timeRange]);
 
-  // 第一次加载 feild names
+  // 第一次加载 field names
+  // @param resp 所有的 field names
   const handleFieldNamesResponse = (streamFields: any, resp: any) => {
-    console.info('stream_field_names:', streamFields);
     const streamFieldMap: Record<string, null> = {};
     if (Array.isArray(streamFields?.values)) {
       streamFields.values.forEach((item: any) => {
@@ -1157,12 +1140,82 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     showFieldSelector();
   };
 
+  const buildFieldSelectorOptions = (filterText?: string) => {
+    const normalizedFilter = filterText?.trim().toLowerCase();
+    const keys = Object.keys(fieldMapRef.current ?? {}).sort();
+    return keys
+      .filter((k) => k !== '' && k.substring(0, 1) >= 'A')
+      .filter((k) => !normalizedFilter || k.toLowerCase().includes(normalizedFilter))
+      .map((k) => ({ label: k, value: k }));
+  };
+
   // 第一次加载时，展示 field 的选择框
   const showFieldSelector = () => {
-    const keys = Object.keys(fieldMapRef.current ?? {}).sort();
-    const opts: Option[] = keys.map((k) => ({ label: k, value: k }));
-    setFieldSelectorDynamicOptions(opts);
-    setFieldSelectorDynamicValue(null);
+    const opts = buildFieldSelectorOptions();
+    setSelectOptions("htmlSelectForFieldNames", opts);
+  };
+
+  // 输入字段名的 textbox, 处理 onKeyUp 事件
+  const onFieldNameInputKeyUp = (inputValue: string) => {
+    // vlogs 做不到动态查询字段名，所以只能本地过滤
+    const sel = document.getElementById('htmlSelectForFieldNames') as HTMLSelectElement | null;
+    if (!sel) {
+      return;
+    }
+    if (sel.options.length < 7) {
+      return;
+    }
+    // 筛选出以前缀开头的字段
+    inputValue = inputValue.trim();
+    const l = inputValue.length;
+    let start = 0;
+    for (let i = 0; i < sel.options.length; i++) {
+      const fieldName = sel.options[i].value;
+      if (fieldName.length < l) {
+        continue;
+      }
+      if (fieldName.substring(0, l) !== inputValue) {
+        continue;
+      }
+      if (i > start) {
+        sel.insertBefore(sel.options.item(i) as HTMLOptionElement, sel.options.item(start));
+        
+      }
+      start++;
+    }
+    // 继续搜索中缀匹配的内容
+    for (let i = start; i < sel.options.length; i++) {
+      const fieldName = sel.options[i].value;
+      if (fieldName.length < l) {
+        continue;
+      }
+      if (!fieldName.includes(inputValue)) {
+        continue;
+      }
+      if (i > start) {
+        sel.insertBefore(sel.options.item(i) as HTMLOptionElement, sel.options.item(start));
+      }
+      start++;
+    }
+    if (start>0) {
+      sel.options.selectedIndex = 0;
+    }
+  };
+
+  const onFieldNameInputBlur = async (inputValue: string) => {
+    // 开始拉取字段的值
+    const values = await loadFieldValues(inputValue, '');
+    const options = values.map((v: any) => ({ label: v, value: v }));
+    setSelectOptions("selForFieldValues", options);
+  };
+
+  const onFieldNameSelectDoubleClick = (value: string) => {
+    const fieldNameInput = document.getElementById('textboxForFieldNames') as HTMLInputElement | null;
+    if (!fieldNameInput) {
+      return;
+    }
+    fieldNameInput.value = value;
+    onFieldNameInputBlur(value);
   };
 
   useEffect(() => {
@@ -1176,13 +1229,23 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
     };
 
+    const clearSelectOptions = (id: string) =>{
+      const sel = document.getElementById(id) as HTMLSelectElement | null;
+      if (!sel){
+        return;
+      }
+      while (sel.options.length>0){
+        sel.options.remove(sel.options.length-1);
+      }
+    }
+
     const resetFilters = () => {
       streamFiltersRef.current = {};
       fieldFiltersRef.current = {};
       msgFiltersRef.current = {};
       fulltextFiltersRef.current = {};
       fieldsAfterStreamFilterRef.current = {};
-      
+
       const addedTd = document.getElementById('addedFieldFilters') as HTMLTableCellElement | null;
       if (addedTd) {
         addedTd.innerHTML = '';
@@ -1191,13 +1254,27 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       if (streamFilterTbody) {
         streamFilterTbody.innerHTML = '';
       }
-      setFieldSelectorDynamicValue(null);
-      setFieldOperatorDynamicValue(null);
-      setFieldValueDynamic('');
       setMessageValue('');
       setFullTextSearch('');
       setFullTextSearchOperator(null);
+      // 字段选中框需要清空
+      clearSelectOptions('htmlSelectForFieldNames');
+      clearSelectOptions('selForFieldValues');
+      cleanTextBox("textboxForFieldNames");
+      cleanTextBox("textboxForFieldValues");
+      const selForFieldOperator = document.getElementById("selForFieldOperator") as HTMLSelectElement | null;
+      if (selForFieldOperator){
+        selForFieldOperator.options.selectedIndex = 0;
+      }
     };
+
+    const cleanTextBox = (id: string) => {
+      const textbox = document.getElementById(id) as HTMLInputElement | null;
+      if (!textbox){
+        return;
+      }
+      textbox.value = "";
+    }
 
     datasourceVarValueRef.current = readDatasourceVariable();
     const subscription = locationService.getLocationObservable().subscribe(() => {
@@ -1293,13 +1370,133 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
   };
 
+  // 动态加载字段的名字
+  const loadFieldNamesDynamic = async () => {
+    const uid = await resolveDatasourceUid();
+    if (!uid) {
+      console.error('loadFFieldNamesByStreamFields: datasource uid not found');
+      setTestError('loadFFieldNamesByStreamFields: datasource uid not found');
+      return;
+    }
+    try {
+      const filters = streamFiltersRef.current;
+      const expressions: string[] = [];
+      if (Object.keys(filters).length === 0) {
+        expressions.push('*');
+      } else {
+        Object.keys(filters).forEach((key) => {
+          const op = filters[key]?.operator ?? '';
+          const val = filters[key]?.value ?? '';
+          const mapped = operatorMap[op] ?? op;
+          if (mapped.includes('xxx')) {
+            expressions.push(`\"${key}\"${mapped.replace('xxx', JSON.stringify(val ?? ''))}`);
+          } else {
+            expressions.push(`\"${key}\"${mapped}${val}`);
+          }
+        });
+      }
+      //
+      const queryExpr = expressions.join(' '); // 表达式之间以空格分割
+      let postData = {
+        query: queryExpr,
+        start: getStartRange(),
+        end: 'now',
+        limit: `${defaultRecordCount}`,
+      };
+      const resp = await getBackendSrv().post(`/api/datasources/uid/${uid}/resources/select/logsql/field_names`, postData);
+      const keys = Array.isArray(resp?.values)
+        ? resp.values
+          .map((item: any) => item?.value ?? '')
+          .filter((k: string) => k !== '' && !(k in sysFields) && !(k in streamFieldMapRef.current))
+          .sort()
+        : [];
+      const opts: Option[] = keys.map((k: string) => ({ label: k, value: k }));
+      let temp: Record<string, any> = {};
+      keys.forEach((item: string) => {
+        temp[item] = null;
+      });
+      fieldsAfterStreamFilterRef.current = temp;
+      setSelectOptions("htmlSelectForFieldNames", opts);
+    } catch (err) {
+      console.error('loadFFieldNamesByStreamFields error', err);
+    }
+  };
+
+  const onSelectForFieldValuesDoubleClick = (value: string) => {
+    const fieldValueInput = document.getElementById('textboxForFieldValues') as HTMLInputElement | null;
+    if (!fieldValueInput) {
+      return;
+    }
+    fieldValueInput.value = value;
+    //
+    addFieldFilter();
+  }
+
+  const onFieldValueInputKeyUp = async (value: string) => {
+    // 根据输入去查询 field 的值
+    const textboxForFieldNames = document.getElementById('textboxForFieldNames') as HTMLInputElement | null;
+    if (!textboxForFieldNames) {
+      return;
+    }
+    const fieldName = textboxForFieldNames.value.trim();
+    if (fieldName === '') {
+      return;
+    }
+    const values = await loadFieldValues(fieldName, value);
+    const options = values.map((v: any) => ({ label: v, value: v }));
+    setSelectOptions("selForFieldValues", options);
+    // 对下载到的内容进行排序
+    const sel = document.getElementById('selForFieldValues') as HTMLSelectElement | null;
+    if (!sel) {
+      return;
+    }
+    let start = 0;
+    for (let i = 0; i < sel.options.length; i++) {
+      const fieldValue = sel.options[i].value;
+      if (fieldValue.length < value.length) {
+        continue;
+      }
+      if (fieldValue.substring(0, value.length) !== value) {
+        continue;
+      }
+      if (i > start) {
+        sel.insertBefore(sel.options.item(i) as HTMLOptionElement, sel.options.item(start));
+      }
+      start++;
+    }
+    for (let i = start; i < sel.options.length; i++) {
+      const fieldValue = sel.options[i].value;
+      if (fieldValue.length < value.length) {
+        continue;
+      }
+      if (!fieldValue.includes(value)) {
+        continue;
+      }
+      if (i > start) {
+        sel.insertBefore(sel.options.item(i) as HTMLOptionElement, sel.options.item(start));
+      }
+      start++;
+    }
+    if (start > 0) {
+      sel.options.selectedIndex = 0;
+    }
+  };
+
+  const onFieldValueInputBlur = (value: string) => {
+    addFieldFilter();
+  };
+
+  const onChangeOfselForFieldOperator = () => {
+    addFieldFilter();
+  }
+
   return (
     <div style={{ height, overflowY: 'auto' }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%' }} border={0}>
+      <table style={{ borderCollapse: 'collapse' }} border={0}>
         <tbody>
           <tr>
             <td>
-              <table style={{ borderCollapse: 'collapse', width: '100%' }} border={1}>
+              <table style={{ borderCollapse: 'collapse' }} border={1}>
                 <tbody>
                   <tr>
                     <td style={{ verticalAlign: 'top', paddingRight: '12px', whiteSpace: 'nowrap' }} width="100">
@@ -1335,51 +1532,63 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
 
                     </td>
                     <td style={{ padding: '4px 0' }}>
-                      <table style={{ width: '800' }}>
+                      <table style={{ width: '800' }} border={1}>
                         <tbody id="field_filter_tbody">
                           <tr>
-                            <td colSpan={4} >
+                            <td colSpan={3} >
                               <div id="addedFixedFieldFilters"></div>
                               <div id="addedFieldFilters"></div>
                             </td>
                           </tr>
                           <tr>
-                            <td valign="top">
-                              <Select
-                                width={25}
-                                options={fieldSelectorDynamicOptions}
-                                allowCustomValue={true}
-                                placeholder="Select field"
-                                id="selForFieldNames"
-                                value={fieldSelectorDynamicOptions.find((o) => o.value === fieldSelectorDynamicValue)}
-                                onChange={(v) => onDynamicFieldSelectChange(v.value)}
+                            <td valign="bottom">
+                              <input
+                                type="text"
+                                placeholder="Input field name or double click to choose one."
+                                onKeyUp={(event) => onFieldNameInputKeyUp(event.currentTarget.value)}
+                                onBlur={(event) => onFieldNameInputBlur(event.currentTarget.value)}
+                                style={{ width: '250px', padding: '4px 8px', border: '1px', borderColor: 'gray' }}
+                                id="textboxForFieldNames"
                               />
+                              <br />
+                              <select
+                                size={8}
+                                style={{ width: '250px', padding: '4px 8px' }}
+                                id="htmlSelectForFieldNames"
+                                onDoubleClick={(event) => onFieldNameSelectDoubleClick(event.currentTarget.value ?? '')}
+                              >
+                              </select>
                             </td>
-                            <td valign="top">
-                              <Select
-                                width={25}
-                                options={
-                                  fieldOperatorDynamicOptions.length
-                                    ? fieldOperatorDynamicOptions
-                                    : defaultFieldOperatorOptions
-                                }
-                                allowCustomValue={false}
-                                placeholder="Choose operator"
-                                value={fieldOperatorDynamicOptions.find((o) => o.value === fieldOperatorDynamicValue)}
-                                onChange={(v) => onDynamicFieldOperatorChange(v.value)}
+                            <td valign="bottom">
+                              Operator:<br />
+                              <select
+                                size={8}
+                                style={{ width: '180px', padding: '4px 8px' }}
+                                id="selForFieldOperator"
+                                onChange={(event) => {
+                                  onChangeOfselForFieldOperator();
+                                }}
+                              >
+                              </select>
+                            </td>
+                            <td valign="bottom">
+                              <input
+                                type="text"
+                                style={{ width: '260px', padding: '4px 8px', border: '1px', borderColor: 'gray' }}
+                                id="textboxForFieldValues"
+                                onKeyUp={(event) => onFieldValueInputKeyUp(event.currentTarget.value)}
+                                onBlur={(event) => onFieldValueInputBlur(event.currentTarget.value)}
+                                placeholder="Input field value or double click to choose one."
                               />
-                            </td>
-                            <td valign="top">
-                              <TextArea
-                                placeholder="input field value"
-                                value={fieldValueDynamic}
-                                onChange={(e) => setFieldValueDynamic(e.currentTarget.value)}
-                              />
-                            </td>
-                            <td valign="top">
-                              <span style={{ padding: '3px' }}>
-                                <button onClick={onAddFieldFilterClick}>Add</button>
-                              </span>
+                              <br />
+                              <select size={8} style={{ width: '260px', padding: '4px 8px' }}
+                                id="selForFieldValues"
+                                onDoubleClick={(event) => {
+                                  const selectedValue = event.currentTarget.value ?? '';
+                                  onSelectForFieldValuesDoubleClick(selectedValue);
+                                }}
+                              >
+                              </select>
                             </td>
                           </tr>
                         </tbody>
@@ -1476,12 +1685,25 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                             const next = e.currentTarget.checked;
                             setOutputAllFields(next);
                             outputAllFieldsOnChange(next);
+                            const btn1 = document.getElementById("btnSetToOneLine");
+                            const btn2 = document.getElementById("btnSetToMultiLine");
+                            if (btn1 && btn2){
+                              if (next){
+                                btn1.style.display = 'none';
+                                btn2.style.display = 'none';
+                              } else {
+                                btn1.style.display = 'block';
+                                btn2.style.display = 'block';
+                              }
+                            }
                           }}
                         />
                         <span>Output all fields</span>
 
                         <button
                           type="button"
+                          id="btnSetToOneLine"
+                          style={{ display: 'none' }}
                           onClick={() => {
                             onClickSingleLineButton();
                           }}
@@ -1490,6 +1712,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                         </button>
                         <button
                           type="button"
+                          id="btnSetToMultiLine"
+                          style={{ display: 'none' }}
                           onClick={() => {
                             onClickMultiLineButton();
                           }}
