@@ -71,6 +71,8 @@ const operatorMap: Record<string, string> = {
 
 const defaultRecordCount = 50;
 
+const nameOfOperatorEqual = "equal";
+
 const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data, options, eventBus }) => {
   const showLogsqlTextarea = options?.showLogsqlTextarea ?? true;
   const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
@@ -172,9 +174,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       let operator: string = '';
       let operatorText: string = '';
       switch (item.operator) {
-        case 'equal':
-          operator = ':=';
-          operatorText = ':= (equal)';
+        case nameOfOperatorEqual:
+          operator = defaultFieldOperatorOptions[0].value;
+          operatorText = defaultFieldOperatorOptions[0].label;
           break;
         default:
           alert("not supported operator:" + item.field + " " + item.operator);
@@ -208,6 +210,70 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     });
   };
 
+  // 增加额外的过滤字段
+  const addExtraStreamFieldFilter = (streamFilters:Record<string, Filter>): string[] => {
+    let sb : string[] = [];
+    // 检查是否有额外的 stream filter 配置
+    if ((jsonConfigRef.current?.extra_stream_filter?.length ?? 0) === 0) {
+      return sb;
+    }
+    const extra_stream_filter = jsonConfigRef.current?.extra_stream_filter;
+    //let isAddComma = Object.keys(streamFilters).length > 0;
+    let isFirst = true;
+    extra_stream_filter?.forEach((item) => {
+      const joinField = item?.if_exists?.field ?? "";
+      if (!(joinField in fieldFiltersRef.current)) {  // 当前的 field 的过滤器中存在，命中
+        return;
+      }
+      const fieldFilter = fieldFiltersRef.current[joinField];
+      const fieldOperator = item?.if_exists?.operator ?? "";
+      switch (fieldOperator) {
+        case nameOfOperatorEqual:
+          if (fieldFilter.operator !== defaultFieldOperatorOptions[0].value) {
+            return;
+          }
+          break;
+        default:
+          alert("json config error, not supported operator:" + fieldOperator);
+          return;
+      }
+      // 执行正则表达式
+      const re = new RegExp(item?.value?.regexp ?? "");
+      const m = re.exec(fieldFilter.value);
+      if (!m) {
+        alert("json config error, regexp error:" + (item?.value?.regexp ?? ""));
+        return;
+      }
+      const result = m?.groups?.[item?.value?.group_name ?? ""] ?? "";
+      if (result.length === 0) {
+        return;
+      }
+      // 输出额外的 stream filter
+      if (Object.keys(streamFilters).length > 0 && isFirst) {
+        sb.push(', ');
+        isFirst = false;
+      } else {
+        if (isFirst) {
+          isFirst = false;
+        } else {
+          sb.push(', ');
+        }
+      }
+      sb.push(JSON.stringify(item?.name));
+      const targetOperator = item?.operator ?? "";
+      switch (targetOperator) {
+        case nameOfOperatorEqual:
+          sb.push('=');
+          break;
+        default:
+          alert("json config error, not supported target operator:" + targetOperator);
+          return;
+      }
+      sb.push(JSON.stringify(result));
+    })
+    return sb;
+  }
+
   // 根据几个全局的 map, 生成 logsQL 语句
   const generateLogsQL = () => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
@@ -239,54 +305,22 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         sb.append(streamFilters[k].operator);
         sb.append(JSON.stringify(streamFilters[k].value ?? ''));
       }
-      // 检查是否有额外的 stream filter 配置
-      if ((jsonConfigRef.current?.extra_stream_filter?.length ?? 0) > 0) {
-        const extra_stream_filter = jsonConfigRef.current?.extra_stream_filter;
-        extra_stream_filter?.forEach((item) => {
-          const joinField = item?.if_exists?.field ?? "";
-          if (!(joinField in fieldFiltersRef.current)) {
-            return;
-          }
-          const fieldFilter = fieldFiltersRef.current[joinField];
-          const fieldOperator = item?.if_exists?.operator ?? "";
-          switch (fieldOperator) {
-            case 'equal':
-              if (fieldFilter.operator !== ':=xxx') {
-                return;
-              }
-              break;
-            default:
-              alert("json config error, not supported operator:" + fieldOperator);
-              return;
-          }
-          // 执行正则表达式
-          const re = new RegExp(item?.value?.regexp ?? "");
-          const m = re.exec(fieldFilter.value);
-          if (!m) {
-            alert("json config error, regexp error:" + (item?.value?.regexp ?? ""));
-            return;
-          }
-          const result = m?.groups?.[item?.value?.group_name ?? ""] ?? "";
-          if (result.length > 0) {
-            // 输出额外的 stream filter
-            if (Object.keys(streamFilters).length > 0) {
-              sb.append(',');
-            }
-            sb.append(JSON.stringify(item?.name));
-            const targetOperator = item?.operator ?? "";
-            switch (targetOperator) {
-              case 'equal':
-                sb.append('=');
-                break;
-              default:
-                alert("json config error, not supported target operator:" + targetOperator);
-                return;
-            }
-            sb.append(JSON.stringify(result));
-          }
-        })
+      const temp = addExtraStreamFieldFilter(streamFilters);
+      if (temp.length>0){
+        for (const index in temp){
+          sb.append(temp[index]);
+        }
       }
       sb.append('} ');
+    } else {
+      const temp = addExtraStreamFieldFilter(streamFilters);
+      if (temp.length>0){
+        sb.append('{');
+        for (const index in temp){
+          sb.append(temp[index]);
+        }
+        sb.append('} ');
+      }
     }
     //
     const fieldFilters = fieldFiltersRef.current;

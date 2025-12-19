@@ -158,22 +158,11 @@ front:
 
 build-frontend:
 	yarn build --env development && \
-	cp ./plugins/victoriametrics-logs-datasource/panels/log-filter/* ./plugins/victoriametrics-logfilter-panel/
+	mkdir -p ./plugins/victorialogs-logfilter-panel/ && \
+	cp ./plugins/victoriametrics-logs-datasource/panels/log-filter/* ./plugins/victorialogs-logfilter-panel/
 
 docker_pull:
 	docker pull grafana/grafana:12.1
-
-docker_run1:
-	docker run -it --rm \
-		--name grafana \
-		-p 3000:3000 \
-		-v ~/Downloads/temp/2025/grafana/data/:/var/lib/grafana \
-		-v ~/Downloads/temp/2025/grafana/config/:/etc/grafana \
-		-e GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS="victoriametrics-logs-datasource,victoriametrics-logfilter-panel" \
-		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
-		-v ~/Downloads/temp/2025/grafana/datasource/:/etc/grafana/provisioning/datasources/ \
-		-v ./plugins/victoriametrics-logs-datasource/panels/log-filter/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
-		grafana/grafana:12.1
 
 docker_run:
 	docker run -it --rm \
@@ -184,7 +173,7 @@ docker_run:
 		-v ./test/config/:/etc/grafana \
 		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
 		-v ./test/datasources/:/etc/grafana/provisioning/datasources/ \
-		-v ./plugins/victoriametrics-logfilter-panel/:/var/lib/grafana/plugins/victoriametrics-logfilter-panel/ \
+		-v ./plugins/victorialogs-logfilter-panel/:/var/lib/grafana/plugins/victorialogs-logfilter-panel/ \
 		grafana/grafana:12.1
 
 docker_run_for_download:
@@ -196,12 +185,12 @@ docker_run_for_download:
 		-v ./test2/config/:/etc/grafana \
 		-v ./test2/datasources/:/etc/grafana/provisioning/datasources/ \
 		-v ./plugins/victorialogs-datasource/:/opt/plugins-src/victorialogs-ds/ \
-		-v ./plugins/victoriametrics-logfilter-panel/:/opt/plugins-src/victorialogs-panel/ \
-		-e GF_PLUGINS_PREINSTALL="victoriametrics-logs-datasource:/opt/plugins-src/victorialogs-ds,victoriametrics-logfilter-panel:/opt/plugins-src/victorialogs-panel" \
+		-v ./plugins/victorialogs-logfilter-panel/:/opt/plugins-src/victorialogs-panel/ \
+		-e GF_PLUGINS_PREINSTALL="victoriametrics-logs-datasource:/opt/plugins-src/victorialogs-ds,victorialogs-logfilter-panel:/opt/plugins-src/victorialogs-panel" \
 		grafana/grafana:12.1
 
 
-#		-e "GF_INSTALL_PLUGINS=victoriametrics-logs-datasource,victoriametrics-logfilter-panel@https://github.com/ahfuzhang/victorialogs-datasource/releases/download/v0.1.1/victoriametrics-logs-datasource-v0.1.2.tar.gz" \
+#		-e "GF_INSTALL_PLUGINS=victoriametrics-logs-datasource,victorialogs-logfilter-panel@https://github.com/ahfuzhang/victorialogs-datasource/releases/download/v0.1.1/victoriametrics-logs-datasource-v0.1.2.tar.gz" \
 
 
 
@@ -211,22 +200,22 @@ local-build: build_golang
 	mkdir -p dist && \
 	$(eval PACKAGE_NAME := $(PLUGIN_ID)-$(PKG_TAG)) \
 	cd plugins/ && \
-	mkdir -p victoriametrics-logfilter-panel && \
-	mv victoriametrics-logs-datasource/panels/log-filter/* ./victoriametrics-logfilter-panel/ && \
-	tar -czf ../dist/$(PACKAGE_NAME).tar.gz ./$(PLUGIN_ID) ./victoriametrics-logfilter-panel/ && \
-	zip -q -r ../dist/$(PACKAGE_NAME).zip ./$(PLUGIN_ID) ./victoriametrics-logfilter-panel/ && \
+	mkdir -p victorialogs-logfilter-panel && \
+	mv victoriametrics-logs-datasource/panels/log-filter/* ./victorialogs-logfilter-panel/ && \
+	tar -czf ../dist/$(PACKAGE_NAME).tar.gz ./$(PLUGIN_ID) ./victorialogs-logfilter-panel/ && \
+	zip -q -r ../dist/$(PACKAGE_NAME).zip ./$(PLUGIN_ID) ./victorialogs-logfilter-panel/ && \
 	cd - && \
 	sha1sum dist/$(PACKAGE_NAME).zip > dist/$(PACKAGE_NAME)_checksums_zip.txt && \
 	sha1sum dist/$(PACKAGE_NAME).tar.gz > dist/$(PACKAGE_NAME)_checksums_tar.gz.txt
 
-# make local-build-panel PLUGIN_ID=victoriametrics-logfilter-panel PKG_TAG=v0.1.7
+# make local-build-panel PLUGIN_ID=victorialogs-logfilter-panel PKG_TAG=v0.1.7
 local-build-panel:
 	yarn build && \
 	mkdir -p dist && \
 	$(eval PACKAGE_NAME := $(PLUGIN_ID)-$(PKG_TAG)) \
 	cd plugins/ && \
-	mkdir -p victoriametrics-logfilter-panel && \
-	mv victoriametrics-logs-datasource/panels/log-filter/* ./victoriametrics-logfilter-panel/ && \
+	mkdir -p victorialogs-logfilter-panel && \
+	mv victoriametrics-logs-datasource/panels/log-filter/* ./victorialogs-logfilter-panel/ && \
 	tar -czf ../dist/$(PACKAGE_NAME).tar.gz ./$(PLUGIN_ID) && \
 	zip -q -r ../dist/$(PACKAGE_NAME).zip ./$(PLUGIN_ID)  && \
 	cd - && \
@@ -249,7 +238,7 @@ gh-upload:
 		--title "$(PKG_TAG)" \
 		--notes "victoriametrics-logs-datasource, with log-filter panel"
 
-# make gh-upload-panel PLUGIN_ID=victoriametrics-logfilter-panel PKG_TAG=v0.1.7
+# make gh-upload-panel PLUGIN_ID=victorialogs-logfilter-panel PKG_TAG=v0.1.7
 gh-upload-panel:
 	gh release create $(PKG_TAG) \
 		dist/$(PLUGIN_ID)-$(PKG_TAG).tar.gz \

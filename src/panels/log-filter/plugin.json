@@ -1,9 +1,9 @@
 {
   "type": "panel",
   "name": "LogFilter",
-  "id": "victoriametrics-logfilter-panel",
+  "id": "victorialogs-logfilter-panel",
   "info": {
-    "description": "LogFilter panel with a text box, button, and YAML configuration textarea.",
+    "description": "LogFilter for VictoriaLogs",
     "author": {
       "name": "VictoriaMetrics",
       "url": "https://victoriametrics.com/"
