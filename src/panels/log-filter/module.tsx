@@ -78,6 +78,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
   const [fullTextSearch, setFullTextSearch] = useState<string>('');
   const [fullTextSearchOperator, setFullTextSearchOperator] = useState<string | null>(null);
+  const [fullTextSearchEnabled, setFullTextSearchEnabled] = useState<boolean>(false);
+  const [messageFilterEnabled, setMessageFilterEnabled] = useState<boolean>(false);
   const [messageValue, setMessageValue] = useState<string>('');
   const [limitEnabled, setLimitEnabled] = useState<boolean>(true);
   const [limitValue, setLimitValue] = useState<string>('100');
@@ -120,6 +122,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // { label: ':eq_field (equal a field)', value: ':eq_field($field)' },
     // { label: ':lt_field (less than a field)', value: ':lt_field($field)' },
   ];
+  //let hasLogsqlAtUrl = false;
 
   // 设置一个 select 控件的选项
   const setSelectOptions = (id: string, options: Option[]) => {
@@ -139,12 +142,34 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   }
 
   const onFullTextSearchBlur = (val: string) => {
+    if (!fullTextSearchEnabled) {
+      return;
+    }
     const op = fullTextSearchOperator ?? '';
     const value = val ?? '';
     if (!op || !value) {
       return;
     }
     fulltextFiltersRef.current['fulltext'] = { operator: op, value };
+    generateLogsQL();
+  };
+
+  const onFullTextSearchToggle = (next: boolean) => {
+    setFullTextSearchEnabled(next);
+    if (!next) {
+      setFullTextSearch('');
+      setFullTextSearchOperator(null);
+      delete fulltextFiltersRef.current['fulltext'];
+    }
+    generateLogsQL();
+  };
+
+  const onMessageToggle = (next: boolean) => {
+    setMessageFilterEnabled(next);
+    if (!next) {
+      setMessageValue('');
+      delete msgFiltersRef.current['_msg'];
+    }
     generateLogsQL();
   };
 
@@ -274,15 +299,33 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     return sb;
   }
 
+
+
   // 根据几个全局的 map, 生成 logsQL 语句
   const generateLogsQL = () => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
     if (!logsql) {
       return;
     }
+    //
+    const streamFilters = streamFiltersRef.current;
+    const fieldFilters = fieldFiltersRef.current;
+    const logsqlFromURL = getLogsqlFromURL();
+    if (logsqlFromURL.length>0 && Object.keys(streamFilters).length === 0 && Object.keys(fieldFilters).length === 0){
+      //hasLogsqlAtUrl = false;
+      //logsql.value = "";
+      //setTestError('not generate logsql');
+      showJSLog('not generate logsql', 'green');
+      logsql.value = logsqlFromURL;
+      return;
+    }
+    //showJSLog('ready to generate logsql:' + hasLogsqlAtUrl.toString(), 'green');
+    //
     const sb = createStringBuilder();
-    const startStr = timeRangeRef.current?.from?.toISOString();
-    const endStr = timeRangeRef.current?.to?.toISOString();
+    const rawFrom = timeRangeRef.current?.raw?.from;
+    const rawTo = timeRangeRef.current?.raw?.to;
+    const startStr = typeof rawFrom === 'string' ? rawFrom : timeRangeRef.current?.from?.toISOString();
+    const endStr = typeof rawTo === 'string' ? rawTo : timeRangeRef.current?.to?.toISOString();
     if (startStr && endStr) {
       sb.append('_time:[');
       sb.append(startStr);
@@ -291,7 +334,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       sb.append('] ');
     }
 
-    const streamFilters = streamFiltersRef.current;
+   
     if (Object.keys(streamFilters).length > 0) {
       sb.append('{');
       let isFirst = true;
@@ -323,7 +366,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
     }
     //
-    const fieldFilters = fieldFiltersRef.current;
     for (const k in fieldFilters) {
       sb.append(JSON.stringify(k));
       const op = fieldFilters[k]?.operator ?? '';
@@ -403,7 +445,18 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       sb.append(' ');
     }
     logsql.value = sb.toString();
+    //showJSLog('generate logsql:' + logsql.value + ' ' + hasLogsqlAtUrl.toString(), 'orange');
+    // 因为这个时候右上角的 query 按钮没有联动。所以此时要写入 var-logsql 到 URL 中
+    const varName: Record<string, any> = {};
+    let varKey = `var-${logsqlVariable}`;
+    if (logsqlVariable.startsWith('$')) {
+      varKey = `var-` + logsqlVariable.substring(1);
+    }
+    varName[varKey] = logsql.value;
+    locationService.partial(varName, true);
+    //hasLogsqlAtUrl = false;
   };
+
   const getFieldsByStreamFields = (streamField?: string, operator?: string, value?: string | null) => {
     const m = streamFiltersRef.current;
     if (m && streamField) {
@@ -573,6 +626,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   const onFieldOperatorChange = (value?: string | null) => {
+    if (!messageFilterEnabled) {
+      return;
+    }
     const op = value ?? '';
     const m = msgFiltersRef.current;
     if ('_msg' in m) {
@@ -584,6 +640,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   const onFieldValueBlur = (val: string) => {
+    if (!messageFilterEnabled) {
+      return;
+    }
     const m = msgFiltersRef.current;
     if ('_msg' in m) {
       m['_msg'].value = val ?? '';
@@ -1002,6 +1061,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       alert('not an array');
       return;
     }
+    if (resp.values.length===0){
+      setTestError('The stream fields returned empty. Please select a larger time range and then refresh the entire page.');
+    }
     const values = [...resp.values].sort((a: any, b: any) => {
       const ka = String(a?.value ?? '');
       const kb = String(b?.value ?? '');
@@ -1087,6 +1149,30 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     return `${Math.max(days, 1)}d`;
   };
 
+  const getLogsqlFromURL = () : string => {
+    // 如果 url 中有 var-logsql，则加到到 logsql 文本框中
+    let varKey = `var-${logsqlVariable}`;
+    if (logsqlVariable.startsWith('$')) {
+      varKey = `var-` + logsqlVariable.substring(1);
+    }
+    try {
+      const logsqlFromUrl = locationService.getSearch().get(varKey);
+      return (logsqlFromUrl && logsqlFromUrl.trim().length>0)? logsqlFromUrl.trim(): '';
+        // hasLogsqlAtUrl = true;
+        // const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
+        // if (logsqlEl) {
+        //   //setTestError(logsqlFromUrl);
+        //   //setTestResult(logsqlFromUrl);
+        //   showJSLog('logsql from url:' + logsqlFromUrl, 'green');
+        //   logsqlEl.value = logsqlFromUrl;
+        // }
+      //}
+    } catch (err) {
+      console.error('read logsql from url failed', err);
+      return '';
+    }
+  }
+
   // panel 加载的时候，填充各种数据
   const loadPanelData = async () => {
     const uid = await resolveDatasourceUid();
@@ -1101,6 +1187,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (selForFieldOperator) {
       selForFieldOperator.options.selectedIndex = 0;
     }
+
     // 开始加载 stream field names
     const path = `/api/datasources/uid/${uid}/resources/select/logsql/stream_field_names`;
     const payload = {
@@ -1263,11 +1350,11 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
     };
 
-    const clearSelectOptions = (id: string) =>{
-      const sel = document.getElementById(id) as HTMLSelectElement | null;
-      if (!sel){
-        return;
-      }
+      const clearSelectOptions = (id: string) =>{
+        const sel = document.getElementById(id) as HTMLSelectElement | null;
+        if (!sel){
+          return;
+        }
       while (sel.options.length>0){
         sel.options.remove(sel.options.length-1);
       }
@@ -1291,6 +1378,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setMessageValue('');
       setFullTextSearch('');
       setFullTextSearchOperator(null);
+      setFullTextSearchEnabled(false);
+      setMessageFilterEnabled(false);
       // 字段选中框需要清空
       clearSelectOptions('htmlSelectForFieldNames');
       clearSelectOptions('selForFieldValues');
@@ -1524,6 +1613,19 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     addFieldFilter();
   }
 
+  const showJSLog = (s: string, color: string) => {
+    const div = document.getElementById('jslog') as HTMLDivElement || null;
+    if (!div){
+      return;
+    }
+    const newNode = document.createElement("DIV");
+    newNode.innerText = s;
+    if (color.length>0){
+      newNode.style.color = color;
+    }
+    div.appendChild(newNode);
+  }
+
   return (
     <div style={{ height, overflowY: 'auto' }}>
       <table style={{ borderCollapse: 'collapse' }} border={0}>
@@ -1630,9 +1732,20 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>message:</td>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>
+                      message: &nbsp;&nbsp;
+                      <div style={{ display: 'inline-flex', alignItems: 'right', marginLeft: '8px' }}>
+                        
+                        <Switch
+                          value={messageFilterEnabled}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            onMessageToggle(e.currentTarget.checked);
+                          }}
+                        />
+                      </div>
+                      </td>
                     <td style={{ padding: '4px 0' }} valign="top">
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
+                      <div style={{ display: messageFilterEnabled ? 'flex' : 'none', gap: '8px', alignItems: 'center', maxWidth: '500px'}}>
                         <Combobox
                           width={25}
                           options={[
@@ -1657,9 +1770,19 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>Full text search:</td>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>
+                      Full text search: &nbsp;&nbsp;
+                      <div style={{ display: 'inline-flex', alignItems: 'right', marginLeft: '8px' }}>
+                        <Switch
+                          value={fullTextSearchEnabled}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            onFullTextSearchToggle(e.currentTarget.checked);
+                          }}
+                        />
+                      </div>
+                    </td>
                     <td style={{ padding: '4px 0' }} valign="top">
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
+                      <div style={{ display: fullTextSearchEnabled ? 'flex' : 'none', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
                         <Select
                           width={25}
                           options={fullTextSearchOptions}
@@ -1683,10 +1806,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                         />
                       </div>
                     </td>
-                  </tr>
-                  <tr>
-                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>query options</td>
-                    <td style={{ padding: '4px 0' }}></td>
                   </tr>
                   <tr>
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>output options</td>
@@ -1770,14 +1889,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     </td>
                   </tr>
                   <tr>
-                    <td colSpan={2} style={{ textAlign: 'center', paddingTop: '12px' }}>
+                    <td colSpan={2} style={{ textAlign: 'center', paddingTop: '12px' }} valign="top">
                       <button
                         type="button"
                         onClick={onClickQueryButton}
                         style={{ padding: '10px 24px', fontSize: '16px', borderRadius: '6px' }}
-                      >
-                        Query
-                      </button>
+                      >Query</button>
                     </td>
                   </tr>
                 </tbody>
@@ -1810,6 +1927,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                 </div>
                 <div id="testResult">{testResult}</div>
                 <div style={{ color: 'red' }}>{testError}</div>
+                <div id="jslog" style={{ maxHeight: '150px', overflow: 'scroll', display: 'none'}}></div>
               </div>
             </td>
           </tr>

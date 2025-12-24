@@ -143,7 +143,7 @@ run_dev:
 npm_build:
 	npm run build --legacy-peer-deps
 
-yarn_install:
+brew_yarn_install:
 	brew install yarn
 
 yarn_install:
