@@ -152,7 +152,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     fulltextFiltersRef.current['fulltext'] = { operator: op, value };
-    generateLogsQL(false);
+    generateLogsQL(true);
   };
 
   const onFullTextSearchToggle = (next: boolean) => {
@@ -162,7 +162,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setFullTextSearchOperator(null);
       delete fulltextFiltersRef.current['fulltext'];
     }
-    generateLogsQL(false);
+    generateLogsQL(true);
   };
 
   const onMessageToggle = (next: boolean) => {
@@ -171,7 +171,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setMessageValue('');
       delete msgFiltersRef.current['_msg'];
     }
-    generateLogsQL(false);
+    generateLogsQL(true);
   };
 
   useEffect(() => {
@@ -399,7 +399,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       const re = new RegExp(item?.value?.regexp ?? "");
       const m = re.exec(fieldFilter.value);
       if (!m) {
-        alert("json config error, regexp error:" + (item?.value?.regexp ?? ""));
+        alert("regexp execute error:" + (item?.value?.regexp ?? ""));
         return;
       }
       const result = m?.groups?.[item?.value?.group_name ?? ""] ?? "";
@@ -443,7 +443,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const fieldFilters = fieldFiltersRef.current;
     if (!force){
       const logsqlFromURL = getLogsqlFromURL();
-      if (logsqlFromURL.length > 0 && Object.keys(streamFilters).length === 0 && Object.keys(fieldFilters).length === 0) {
+      if (logsqlFromURL.length > 0 && 
+          logsqlFromURL===firstTimeLogsql && 
+          Object.keys(streamFilters).length === 0 && 
+          Object.keys(fieldFilters).length === 0) {
         //hasLogsqlAtUrl = false;
         //logsql.value = "";
         //setTestError('not generate logsql');
@@ -773,6 +776,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   const onFieldValueBlur = (val: string) => {
+    //showJSLog('onFieldValueBlur', 'red');
     if (!messageFilterEnabled) {
       return;
     }
@@ -782,7 +786,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       m['_msg'] = { operator: ':~', value: val ?? '' };
     }
-    generateLogsQL(false);
+    generateLogsQL(true);
   };
 
   const onLogsqlCopy = () => {
@@ -871,7 +875,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const m = streamFiltersRef.current;
     if (streamField) {
       m[streamField] = { operator: operator ?? '', value: val ?? '' };
-      generateLogsQL(false);
+      generateLogsQL(true);
       await loadFieldNamesByStreamFields();
     }
   };
