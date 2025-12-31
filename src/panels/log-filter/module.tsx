@@ -123,6 +123,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     // { label: ':lt_field (less than a field)', value: ':lt_field($field)' },
   ];
   //let hasLogsqlAtUrl = false;
+  let firstTimeLogsql = '';  // 刚刚加载面板时候得到的 logsql
 
   // 设置一个 select 控件的选项
   const setSelectOptions = (id: string, options: Option[]) => {
@@ -151,7 +152,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     fulltextFiltersRef.current['fulltext'] = { operator: op, value };
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   const onFullTextSearchToggle = (next: boolean) => {
@@ -161,7 +162,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setFullTextSearchOperator(null);
       delete fulltextFiltersRef.current['fulltext'];
     }
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   const onMessageToggle = (next: boolean) => {
@@ -170,16 +171,101 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setMessageValue('');
       delete msgFiltersRef.current['_msg'];
     }
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   useEffect(() => {
-    generateLogsQL();
+    showJSLog('useEffect: []', 'orange');
+    setTestError('');
+    const datasourceUrlKey = 'var-datasource';
+    const readDatasourceVariable = () => {
+      try {
+        return locationService.getSearch().get(datasourceUrlKey);
+      } catch (err) {
+        console.error('read datasource variable from url failed', err);
+        return null;
+      }
+    };
+
+    if (firstTimeLogsql.length===0){
+      firstTimeLogsql = getLogsqlFromURL();
+    }
+
+    const clearSelectOptions = (id: string) => {
+      const sel = document.getElementById(id) as HTMLSelectElement | null;
+      if (!sel) {
+        return;
+      }
+      while (sel.options.length > 0) {
+        sel.options.remove(sel.options.length - 1);
+      }
+    }
+
+    const resetFilters = () => {
+      streamFiltersRef.current = {};
+      fieldFiltersRef.current = {};
+      msgFiltersRef.current = {};
+      fulltextFiltersRef.current = {};
+      fieldsAfterStreamFilterRef.current = {};
+
+      const addedTd = document.getElementById('addedFieldFilters') as HTMLTableCellElement | null;
+      if (addedTd) {
+        addedTd.innerHTML = '';
+      }
+      const streamFilterTbody = document.getElementById('stream_filter_tbody') as HTMLTableSectionElement | null;
+      if (streamFilterTbody) {
+        streamFilterTbody.innerHTML = '';
+      }
+      setMessageValue('');
+      setFullTextSearch('');
+      setFullTextSearchOperator(null);
+      setFullTextSearchEnabled(false);
+      setMessageFilterEnabled(false);
+      // 字段选中框需要清空
+      clearSelectOptions('htmlSelectForFieldNames');
+      clearSelectOptions('selForFieldValues');
+      cleanTextBox("textboxForFieldNames");
+      cleanTextBox("textboxForFieldValues");
+      const selForFieldOperator = document.getElementById("selForFieldOperator") as HTMLSelectElement | null;
+      if (selForFieldOperator) {
+        selForFieldOperator.options.selectedIndex = 0;
+      }
+    };
+
+    const cleanTextBox = (id: string) => {
+      const textbox = document.getElementById(id) as HTMLInputElement | null;
+      if (!textbox) {
+        return;
+      }
+      textbox.value = "";
+    }
+
+    datasourceVarValueRef.current = readDatasourceVariable();
+    const subscription = locationService.getLocationObservable().subscribe(() => {
+      const currentValue = readDatasourceVariable();
+      if (currentValue === datasourceVarValueRef.current) {
+        return;
+      }
+
+      datasourceVarValueRef.current = currentValue;
+      resetFilters();
+      loadPanelData();
+      generateLogsQL(false);
+      eventBus.publish({ type: PanelEvents.refresh.name } as any);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    showJSLog('useEffect: [limitEnabled, limitValue]', 'green');
+    generateLogsQL(true);
   }, [limitEnabled, limitValue]);
   useEffect(() => {
+    showJSLog('useEffect: [options?.jsonConfig]', 'green');
     setJsonConfig(options?.jsonConfig ?? '');
   }, [options?.jsonConfig]);
   useEffect(() => {
+    showJSLog('useEffect: [jsonConfig]', 'green');
     try {
       jsonConfigRef.current = jsonConfig ? (JSON.parse(jsonConfig) as JsonConfigShape) : null;
     } catch (err) {
@@ -187,6 +273,53 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       console.error('jsonConfig parse error', err);
     }
   }, [jsonConfig]);
+
+  useEffect(() => {
+    showJSLog('useEffect: loadPanelData()', 'green');
+    loadPanelData();
+    createFixedFieldFilterFromConfig();
+  }, []);
+
+  // keep latest timeRange in ref without resetting UI state
+  useEffect(() => {
+    showJSLog('useEffect: [timeRange] xx', 'green');
+    timeRangeRef.current = timeRange;
+    //onTimeRangeChange(timeRange);
+    const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
+    if (!logsql) {
+      showJSLog('not found', 'red');
+      return;
+    }
+    const s = logsql.value;
+    const re = /^\s*_time:\[[^\]]*\].*/g;
+    if (re.test(s)){
+      showJSLog('found 1', 'green');
+      const idx = s.indexOf(']');
+      if (idx!=-1){
+        showJSLog('found 2', 'green');
+        const sb = createStringBuilder();
+        const rawFrom = timeRangeRef.current?.raw?.from;
+        const rawTo = timeRangeRef.current?.raw?.to;
+        const startStr = typeof rawFrom === 'string' ? rawFrom : timeRangeRef.current?.from?.toISOString();
+        const endStr = typeof rawTo === 'string' ? rawTo : timeRangeRef.current?.to?.toISOString();
+        if (startStr && endStr) {
+          sb.append('_time:[');
+          sb.append(startStr);
+          sb.append(', ');
+          sb.append(endStr);
+          sb.append(']');
+        }
+        logsql.value = sb.toString() + s.substring(idx+1);
+        return;
+      }
+    } else {
+      showJSLog(s, 'blue');
+    }
+    generateLogsQL(true);
+    //const startsWithTime = /^_time:/.test(s);
+    //showJSLog(`logsql starts with _time:: ${startsWithTime}`, startsWithTime ? 'green' : 'red');
+  }, [timeRange]);
+
   // 根据配置，创建固定的某个字段的过滤器 UI
   const createFixedFieldFilterFromConfig = () => {
     const addedTd = document.getElementById('addedFixedFieldFilters') as HTMLTableCellElement | null;
@@ -236,8 +369,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   // 增加额外的过滤字段
-  const addExtraStreamFieldFilter = (streamFilters:Record<string, Filter>): string[] => {
-    let sb : string[] = [];
+  const addExtraStreamFieldFilter = (streamFilters: Record<string, Filter>): string[] => {
+    let sb: string[] = [];
     // 检查是否有额外的 stream filter 配置
     if ((jsonConfigRef.current?.extra_stream_filter?.length ?? 0) === 0) {
       return sb;
@@ -299,10 +432,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     return sb;
   }
 
-
-
   // 根据几个全局的 map, 生成 logsQL 语句
-  const generateLogsQL = () => {
+  const generateLogsQL = (force:boolean) => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
     if (!logsql) {
       return;
@@ -310,14 +441,16 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     //
     const streamFilters = streamFiltersRef.current;
     const fieldFilters = fieldFiltersRef.current;
-    const logsqlFromURL = getLogsqlFromURL();
-    if (logsqlFromURL.length>0 && Object.keys(streamFilters).length === 0 && Object.keys(fieldFilters).length === 0){
-      //hasLogsqlAtUrl = false;
-      //logsql.value = "";
-      //setTestError('not generate logsql');
-      showJSLog('not generate logsql', 'green');
-      logsql.value = logsqlFromURL;
-      return;
+    if (!force){
+      const logsqlFromURL = getLogsqlFromURL();
+      if (logsqlFromURL.length > 0 && Object.keys(streamFilters).length === 0 && Object.keys(fieldFilters).length === 0) {
+        //hasLogsqlAtUrl = false;
+        //logsql.value = "";
+        //setTestError('not generate logsql');
+        showJSLog('not generate logsql', 'green');
+        logsql.value = logsqlFromURL;
+        return;
+      }
     }
     //showJSLog('ready to generate logsql:' + hasLogsqlAtUrl.toString(), 'green');
     //
@@ -334,7 +467,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       sb.append('] ');
     }
 
-   
+
     if (Object.keys(streamFilters).length > 0) {
       sb.append('{');
       let isFirst = true;
@@ -349,17 +482,17 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         sb.append(JSON.stringify(streamFilters[k].value ?? ''));
       }
       const temp = addExtraStreamFieldFilter(streamFilters);
-      if (temp.length>0){
-        for (const index in temp){
+      if (temp.length > 0) {
+        for (const index in temp) {
           sb.append(temp[index]);
         }
       }
       sb.append('} ');
     } else {
       const temp = addExtraStreamFieldFilter(streamFilters);
-      if (temp.length>0){
+      if (temp.length > 0) {
         sb.append('{');
-        for (const index in temp){
+        for (const index in temp) {
           sb.append(temp[index]);
         }
         sb.append('} ');
@@ -462,7 +595,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (m && streamField) {
       // 记录下修改后的 stream filter
       m[streamField] = { operator: operator ?? '', value: value ?? '' };
-      generateLogsQL();
+      generateLogsQL(false);
       loadFieldNamesByStreamFields();
     }
   };
@@ -502,9 +635,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   };
 
   // 选择的时间范围变更的时候，响应这个事件
-  const onTimeRangeChange = (tr?: TimeRange) => {
-    generateLogsQL();
-  };
+  // const onTimeRangeChange = (tr?: TimeRange) => {
+  //   generateLogsQL(true);
+  // };
 
   const loadFieldValues = async (fieldName: string, match: string): Promise<string[]> => {
     const uid = await resolveDatasourceUid();
@@ -573,7 +706,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       delete fieldFiltersRef.current[fieldName];
     }
-    generateLogsQL();
+    generateLogsQL(false);
   }
 
   const addFieldFilter = () => {
@@ -599,7 +732,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     const fieldValue = textboxForFieldValue.value.trim();
-    if (fieldValue.length === 0) { 
+    if (fieldValue.length === 0) {
       return;
     }
     createOrUpdateFieldFilterData(fieldName, operator, operatorText, fieldValue);
@@ -617,7 +750,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const onRemoveFieldFilterClick = (wrapper: HTMLElement, fieldKey: string) => {
     wrapper.remove();
     delete fieldFiltersRef.current[fieldKey];
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   const onFilterByStreamFieldsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -636,7 +769,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       m['_msg'] = { operator: op, value: '' };
     }
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   const onFieldValueBlur = (val: string) => {
@@ -649,7 +782,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     } else {
       m['_msg'] = { operator: ':~', value: val ?? '' };
     }
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   const onLogsqlCopy = () => {
@@ -738,7 +871,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     const m = streamFiltersRef.current;
     if (streamField) {
       m[streamField] = { operator: operator ?? '', value: val ?? '' };
-      generateLogsQL();
+      generateLogsQL(false);
       await loadFieldNamesByStreamFields();
     }
   };
@@ -895,7 +1028,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         if (streamField) {
           delete streamFiltersRef.current[streamField];
         }
-        generateLogsQL();
+        generateLogsQL(true);  // 去掉字段，强制更新 logsql
         break;
       case '=':
       case '!=':
@@ -1061,7 +1194,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       alert('not an array');
       return;
     }
-    if (resp.values.length===0){
+    if (resp.values.length === 0) {
       setTestError('The stream fields returned empty. Please select a larger time range and then refresh the entire page.');
     }
     const values = [...resp.values].sort((a: any, b: any) => {
@@ -1149,7 +1282,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     return `${Math.max(days, 1)}d`;
   };
 
-  const getLogsqlFromURL = () : string => {
+  const getLogsqlFromURL = (): string => {
     // 如果 url 中有 var-logsql，则加到到 logsql 文本框中
     let varKey = `var-${logsqlVariable}`;
     if (logsqlVariable.startsWith('$')) {
@@ -1157,15 +1290,15 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
     try {
       const logsqlFromUrl = locationService.getSearch().get(varKey);
-      return (logsqlFromUrl && logsqlFromUrl.trim().length>0)? logsqlFromUrl.trim(): '';
-        // hasLogsqlAtUrl = true;
-        // const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
-        // if (logsqlEl) {
-        //   //setTestError(logsqlFromUrl);
-        //   //setTestResult(logsqlFromUrl);
-        //   showJSLog('logsql from url:' + logsqlFromUrl, 'green');
-        //   logsqlEl.value = logsqlFromUrl;
-        // }
+      return (logsqlFromUrl && logsqlFromUrl.trim().length > 0) ? logsqlFromUrl.trim() : '';
+      // hasLogsqlAtUrl = true;
+      // const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
+      // if (logsqlEl) {
+      //   //setTestError(logsqlFromUrl);
+      //   //setTestResult(logsqlFromUrl);
+      //   showJSLog('logsql from url:' + logsqlFromUrl, 'green');
+      //   logsqlEl.value = logsqlFromUrl;
+      // }
       //}
     } catch (err) {
       console.error('read logsql from url failed', err);
@@ -1214,17 +1347,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       console.error('stream_field_names error', err);
     }
   };
-
-  useEffect(() => {
-    loadPanelData();
-    createFixedFieldFilterFromConfig();
-  }, []);
-
-  // keep latest timeRange in ref without resetting UI state
-  useEffect(() => {
-    timeRangeRef.current = timeRange;
-    onTimeRangeChange(timeRange);
-  }, [timeRange]);
 
   // 第一次加载 field names
   // @param resp 所有的 field names
@@ -1300,7 +1422,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
       if (i > start) {
         sel.insertBefore(sel.options.item(i) as HTMLOptionElement, sel.options.item(start));
-        
+
       }
       start++;
     }
@@ -1318,7 +1440,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
       start++;
     }
-    if (start>0) {
+    if (start > 0) {
       sel.options.selectedIndex = 0;
     }
   };
@@ -1339,83 +1461,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     onFieldNameInputBlur(value);
   };
 
-  useEffect(() => {
-    const datasourceUrlKey = 'var-datasource';
-    const readDatasourceVariable = () => {
-      try {
-        return locationService.getSearch().get(datasourceUrlKey);
-      } catch (err) {
-        console.error('read datasource variable from url failed', err);
-        return null;
-      }
-    };
-
-      const clearSelectOptions = (id: string) =>{
-        const sel = document.getElementById(id) as HTMLSelectElement | null;
-        if (!sel){
-          return;
-        }
-      while (sel.options.length>0){
-        sel.options.remove(sel.options.length-1);
-      }
-    }
-
-    const resetFilters = () => {
-      streamFiltersRef.current = {};
-      fieldFiltersRef.current = {};
-      msgFiltersRef.current = {};
-      fulltextFiltersRef.current = {};
-      fieldsAfterStreamFilterRef.current = {};
-
-      const addedTd = document.getElementById('addedFieldFilters') as HTMLTableCellElement | null;
-      if (addedTd) {
-        addedTd.innerHTML = '';
-      }
-      const streamFilterTbody = document.getElementById('stream_filter_tbody') as HTMLTableSectionElement | null;
-      if (streamFilterTbody) {
-        streamFilterTbody.innerHTML = '';
-      }
-      setMessageValue('');
-      setFullTextSearch('');
-      setFullTextSearchOperator(null);
-      setFullTextSearchEnabled(false);
-      setMessageFilterEnabled(false);
-      // 字段选中框需要清空
-      clearSelectOptions('htmlSelectForFieldNames');
-      clearSelectOptions('selForFieldValues');
-      cleanTextBox("textboxForFieldNames");
-      cleanTextBox("textboxForFieldValues");
-      const selForFieldOperator = document.getElementById("selForFieldOperator") as HTMLSelectElement | null;
-      if (selForFieldOperator){
-        selForFieldOperator.options.selectedIndex = 0;
-      }
-    };
-
-    const cleanTextBox = (id: string) => {
-      const textbox = document.getElementById(id) as HTMLInputElement | null;
-      if (!textbox){
-        return;
-      }
-      textbox.value = "";
-    }
-
-    datasourceVarValueRef.current = readDatasourceVariable();
-    const subscription = locationService.getLocationObservable().subscribe(() => {
-      const currentValue = readDatasourceVariable();
-      if (currentValue === datasourceVarValueRef.current) {
-        return;
-      }
-
-      datasourceVarValueRef.current = currentValue;
-      resetFilters();
-      loadPanelData();
-      generateLogsQL();
-      eventBus.publish({ type: PanelEvents.refresh.name } as any);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
   const getOutputFieldChooseMode = (): boolean => {
     return outputAllFields;
   }
@@ -1427,7 +1472,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     container.style.display = "none";
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   // 点击选择字段的按钮
@@ -1445,7 +1490,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     if (txtFieldsList) {
       txtFieldsList.value = '_msg, ' + Object.keys(m).join(', ');
     }
-    generateLogsQL();
+    generateLogsQL(false);
   };
 
   const onClickMultiLineButton = () => {
@@ -1614,13 +1659,20 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   }
 
   const showJSLog = (s: string, color: string) => {
+    const now = new Date();
+    const formattedTime =
+      String(now.getMinutes()).padStart(2, '0') +
+      ':' +
+      String(now.getSeconds()).padStart(2, '0') +
+      '.' +
+      String(now.getMilliseconds()).padStart(3, '0');
     const div = document.getElementById('jslog') as HTMLDivElement || null;
-    if (!div){
+    if (!div) {
       return;
     }
     const newNode = document.createElement("DIV");
-    newNode.innerText = s;
-    if (color.length>0){
+    newNode.innerText = formattedTime + ' '+ s;
+    if (color.length > 0) {
       newNode.style.color = color;
     }
     div.appendChild(newNode);
@@ -1735,7 +1787,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                     <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>
                       message: &nbsp;&nbsp;
                       <div style={{ display: 'inline-flex', alignItems: 'right', marginLeft: '8px' }}>
-                        
+
                         <Switch
                           value={messageFilterEnabled}
                           onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1743,9 +1795,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                           }}
                         />
                       </div>
-                      </td>
+                    </td>
                     <td style={{ padding: '4px 0' }} valign="top">
-                      <div style={{ display: messageFilterEnabled ? 'flex' : 'none', gap: '8px', alignItems: 'center', maxWidth: '500px'}}>
+                      <div style={{ display: messageFilterEnabled ? 'flex' : 'none', gap: '8px', alignItems: 'center', maxWidth: '500px' }}>
                         <Combobox
                           width={25}
                           options={[
@@ -1840,8 +1892,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                             outputAllFieldsOnChange(next);
                             const btn1 = document.getElementById("btnSetToOneLine");
                             const btn2 = document.getElementById("btnSetToMultiLine");
-                            if (btn1 && btn2){
-                              if (next){
+                            if (btn1 && btn2) {
+                              if (next) {
                                 btn1.style.display = 'none';
                                 btn2.style.display = 'none';
                               } else {
@@ -1881,7 +1933,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                           style={{ width: '100%', height: '150px' }}
                           id="txtOutputFieldsList"
                           onBlur={(e) => {
-                            generateLogsQL();
+                            generateLogsQL(false);
                           }}
                         />
                       </div>
@@ -1927,7 +1979,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                 </div>
                 <div id="testResult">{testResult}</div>
                 <div style={{ color: 'red' }}>{testError}</div>
-                <div id="jslog" style={{ maxHeight: '150px', overflow: 'scroll', display: 'none'}}></div>
+                <div id="jslog" style={{ border: 0, height: '200px', maxHeight: '200px', overflow: 'scroll', display: 'none' }}></div>
               </div>
             </td>
           </tr>
