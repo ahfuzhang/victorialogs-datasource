@@ -3,6 +3,7 @@
     "jsx": "react",
     "baseUrl": "/",
     "outDir": "victorialogs-datasource",
+    "rootDir": ".",
     "rootDirs": ["/"],
     "allowJs": true,
     "strict": true,

@@ -161,6 +161,9 @@ build-frontend:
 	mkdir -p ./plugins/victorialogs-logfilter-panel/ && \
 	cp ./plugins/victoriametrics-logs-datasource/panels/log-filter/* ./plugins/victorialogs-logfilter-panel/
 
+#	mkdir ./plugins/logs-ahfu/ && \
+#	cp ./plugins/victoriametrics-logs-datasource/panels/logs/* ./plugins/logs-ahfu/
+
 docker_pull:
 	docker pull grafana/grafana:12.1
 
@@ -174,6 +177,7 @@ docker_run:
 		-v ./plugins/victoriametrics-logs-datasource/:/var/lib/grafana/plugins/victoriametrics-logs-datasource/ \
 		-v ./test/datasources/:/etc/grafana/provisioning/datasources/ \
 		-v ./plugins/victorialogs-logfilter-panel/:/var/lib/grafana/plugins/victorialogs-logfilter-panel/ \
+		-v ./plugins/logs-ahfu/:/var/lib/grafana/plugins/logs-ahfu/ \
 		grafana/grafana:12.1
 
 docker_run_for_download:

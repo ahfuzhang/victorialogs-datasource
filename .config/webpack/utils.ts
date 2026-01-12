@@ -39,12 +39,20 @@ export function hasReadme() {
 }
 
 // Support bundling nested plugins by finding all plugin.json files in src directory
-// then checking for a sibling module.[jt]sx? file.
+// then checking for a sibling module.[jt]sx? file. Also allow packaging panels that
+// live outside of the main src folder (e.g. under ./panels).
 export async function getEntries(): Promise<Record<string, string>> {
-  const pluginsJson = await glob('**/src/**/plugin.json', { absolute: true });
+  const pluginJsonPatterns = ['**/src/**/plugin.json', 'panels/**/plugin.json'];
+  const pluginsJson = new Set<string>();
+
+  for (const pattern of pluginJsonPatterns) {
+    for (const pluginJson of await glob(pattern, { absolute: true })) {
+      pluginsJson.add(pluginJson);
+    }
+  }
 
   const plugins = await Promise.all(
-    pluginsJson.map((pluginJson) => {
+    Array.from(pluginsJson).map((pluginJson) => {
       const folder = path.dirname(pluginJson);
       return glob(`${folder}/module.{ts,tsx,js,jsx}`, { absolute: true });
     })

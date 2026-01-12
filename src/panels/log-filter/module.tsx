@@ -1,8 +1,33 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { PanelEvents, PanelPlugin, type PanelProps, type TimeRange } from '@grafana/data';
-import { Combobox, Select, Switch, TextArea } from '@grafana/ui';
+import {
+  CoreApp,
+  FALLBACK_COLOR,
+  FieldType,
+  LoadingState,
+  LogsDedupStrategy,
+  durationToMilliseconds,
+  formattedValueToString,
+  parseDuration,
+  getFieldDisplayValues,
+  getDisplayProcessor,
+  getFieldDisplayName,
+  getFieldSeriesColor,
+  PanelEvents,
+  PanelPlugin,
+  type DataQueryRequest,
+  type PanelData,
+  type DataFrameFieldIndex,
+  type PanelProps,
+  type TimeRange,
+  type DataFrame,
+  toDataFrame,
+} from '@grafana/data';
+import { LegendDisplayMode, LogsSortOrder, TooltipDisplayMode, defaultVizLegendOptions, type VizLegendOptions } from '@grafana/schema';
+import { Combobox, Select, SeriesIcon, SeriesTable, Switch, TextArea, TimeSeries, TooltipPlugin2, useTheme2, VizLayout, type ComboboxOption } from '@grafana/ui';
 import { getBackendSrv, locationService } from '@grafana/runtime';
+import { LogsPanel } from '../../../panels/logs/LogsPanel';
+import type { Options as LogsPanelOptions } from '../../../panels/logs/panelcfg.gen';
 
 
 interface LogFilterOptions {
@@ -39,6 +64,31 @@ type StringBuilder = {
   clear: () => void;
 };
 
+type PieSlice = {
+  label: string;
+  value: number;
+  percent: number;
+  color: string;
+  hoverColor: string;
+  displayValue: string;
+  displayPercent: string;
+};
+
+type TimeSeriesLegendItem = {
+  label: string;
+  color: string;
+  fieldIndex: DataFrameFieldIndex;
+};
+
+type PieTooltipState = {
+  x: number;
+  y: number;
+  label: string;
+  color: string;
+  displayValue: string;
+  displayPercent: string;
+};
+
 const createStringBuilder = (initial = ''): StringBuilder => {
   const parts: string[] = initial ? [initial] : [];
   return {
@@ -73,9 +123,339 @@ const defaultRecordCount = 50;
 
 const nameOfOperatorEqual = "equal";
 
-const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRange, data, options, eventBus }) => {
+const stepIntervalMsMap: Record<string, number> = {
+  '1s': 1000,
+  '5s': 5000,
+  '10s': 10000,
+  '30s': 30000,
+  '1m': 60000,
+  '2m': 120000,
+  '5m': 300000,
+  '10m': 600000,
+  '20m': 1200000,
+  '30m': 1800000,
+  '1h': 3600000,
+};
+
+const stepComboboxOptions: Array<ComboboxOption<string>> = Object.keys(stepIntervalMsMap).map((value) => ({
+  label: value,
+  value,
+}));
+
+const getIntervalMsFromStep = (raw: unknown): number | undefined => {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (!key) {
+    return undefined;
+  }
+  const mapped = stepIntervalMsMap[key];
+  if (mapped) {
+    return mapped;
+  }
+  try {
+    const duration = parseDuration(key);
+    const ms = durationToMilliseconds(duration);
+    if (Number.isFinite(ms) && ms > 0) {
+      return ms;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+};
+
+const timeSeriesQueryFields = ['status_code'];
+
+const decodeLegendLabel = (raw: unknown, fields: string[]): string | undefined => {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return trimmed;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object') {
+      return trimmed;
+    }
+    const values = fields.length
+      ? fields.map((key) => {
+          const value = parsed[key];
+          if (value === '' || value == null) {
+            return 'others';
+          }
+          return String(value);
+        })
+      : Object.values(parsed).map((value) => {
+          if (value === '' || value == null) {
+            return 'others';
+          }
+          return String(value);
+        });
+    const label = values.join(' ').trim();
+    return label.length ? label : 'others';
+  } catch {
+    return trimmed;
+  }
+};
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const normalizeHexColor = (color: string): string | null => {
+  const trimmed = color.trim();
+  if (!trimmed.startsWith('#')) {
+    return null;
+  }
+  const hex = trimmed.slice(1);
+  if (hex.length === 3) {
+    return `#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`.toLowerCase();
+  }
+  if (hex.length === 6) {
+    return `#${hex.toLowerCase()}`;
+  }
+  return null;
+};
+
+const parseRgbColor = (color: string): { r: number; g: number; b: number; a?: number } | null => {
+  const match = color.trim().match(/^rgba?\(([^)]+)\)$/i);
+  if (!match) {
+    return null;
+  }
+  const parts = match[1].split(',').map((part) => part.trim());
+  if (parts.length < 3) {
+    return null;
+  }
+  const parseChannel = (value: string) => {
+    if (value.endsWith('%')) {
+      return clamp(Math.round(parseFloat(value) * 2.55), 0, 255);
+    }
+    return clamp(Math.round(parseFloat(value)), 0, 255);
+  };
+  const r = parseChannel(parts[0]);
+  const g = parseChannel(parts[1]);
+  const b = parseChannel(parts[2]);
+  const a = parts[3] != null ? clamp(parseFloat(parts[3]), 0, 1) : undefined;
+  if (![r, g, b].every(Number.isFinite)) {
+    return null;
+  }
+  return { r, g, b, a };
+};
+
+const toHex = (value: number) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, '0');
+
+const adjustColor = (color: string, amount: number): string => {
+  const hex = normalizeHexColor(color);
+  const adjustChannel = (value: number) => {
+    if (amount >= 0) {
+      return clamp(Math.round(value + (255 - value) * amount), 0, 255);
+    }
+    return clamp(Math.round(value * (1 + amount)), 0, 255);
+  };
+  if (hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `#${toHex(adjustChannel(r))}${toHex(adjustChannel(g))}${toHex(adjustChannel(b))}`;
+  }
+  const rgb = parseRgbColor(color);
+  if (rgb) {
+    const r = adjustChannel(rgb.r);
+    const g = adjustChannel(rgb.g);
+    const b = adjustChannel(rgb.b);
+    if (rgb.a != null && Number.isFinite(rgb.a)) {
+      return `rgba(${r}, ${g}, ${b}, ${rgb.a})`;
+    }
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  return color;
+};
+
+const polarToCartesian = (cx: number, cy: number, radius: number, angleInDegrees: number) => {
+  const angleInRadians = (angleInDegrees * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(angleInRadians),
+    y: cy + radius * Math.sin(angleInRadians),
+  };
+};
+
+const describeArc = (cx: number, cy: number, radius: number, startAngle: number, endAngle: number) => {
+  const start = polarToCartesian(cx, cy, radius, endAngle);
+  const end = polarToCartesian(cx, cy, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y} Z`;
+};
+
+const logVolumeLegend: VizLegendOptions = {
+  ...defaultVizLegendOptions,
+  placement: (defaultVizLegendOptions.placement ?? 'bottom') as VizLegendOptions['placement'],
+  displayMode: LegendDisplayMode.List,
+  calcs: [],
+  showLegend: true,
+};
+
+const timeSeriesLegend: VizLegendOptions = {
+  ...logVolumeLegend,
+  showLegend: false,
+};
+
+const logVolumeFieldConfig = {
+  color: {
+    mode: 'palette-classic',
+    seriesBy: 'last',
+  },
+  custom: {
+    axisBorderShow: false,
+    axisCenteredZero: false,
+    axisColorMode: 'text',
+    axisLabel: '',
+    axisPlacement: 'auto',
+    barAlignment: 0,
+    barWidthFactor: 0.6,
+    drawStyle: 'bars',
+    fillOpacity: 50,
+    gradientMode: 'none',
+    hideFrom: {
+      legend: false,
+      tooltip: false,
+      viz: false,
+    },
+    insertNulls: false,
+    lineInterpolation: 'linear',
+    lineWidth: 2,
+    pointSize: 5,
+    scaleDistribution: {
+      log: 2,
+      type: 'symlog',
+    },
+    showPoints: 'always',
+    spanNulls: false,
+    stacking: {
+      group: 'A',
+      mode: 'normal',
+    },
+    thresholdsStyle: {
+      mode: 'off',
+    },
+  },
+  mappings: [],
+  noValue: 'no data found',
+  thresholds: {
+    mode: 'absolute',
+    steps: [
+      {
+        color: 'green',
+        value: 0,
+      },
+      {
+        color: 'red',
+        value: 80,
+      },
+    ],
+  },
+};
+
+const logVolumeVizOptions = {
+  legend: {
+    calcs: [],
+    displayMode: 'list',
+    placement: 'bottom',
+    showLegend: true,
+  },
+  tooltip: {
+    hideZeros: false,
+    mode: TooltipDisplayMode.Multi,
+    sort: 'none',
+  },
+};
+
+const logsPanelOptions: LogsPanelOptions = {
+  dedupStrategy: LogsDedupStrategy.exact,
+  enableInfiniteScrolling: false,
+  enableLogDetails: true,
+  prettifyLogMessage: false,
+  showCommonLabels: false,
+  showLabels: false,
+  showLogContextToggle: false,
+  showTime: true,
+  sortOrder: LogsSortOrder.Descending,
+  wrapLogMessage: true,
+};
+
+const pieChartFieldConfig = {
+  defaults: {
+    color: {
+      mode: 'palette-classic',
+    },
+    custom: {
+      hideFrom: {
+        legend: false,
+        tooltip: false,
+        viz: false,
+      },
+    },
+    mappings: [],
+  },
+  overrides: [],
+};
+
+const pieChartOptions = {
+  displayLabels: ['value', 'percent'],
+  legend: {
+    displayMode: 'table',
+    placement: 'right' as const,
+    showLegend: true,
+    values: ['percent', 'value'],
+  },
+  pieType: 'pie',
+  reduceOptions: {
+    calcs: ['sum'],
+    fields: '',
+    values: false,
+  },
+  tooltip: {
+    hideZeros: true,
+    mode: 'multi',
+    sort: 'desc',
+  },
+};
+
+const tooltipHoverModeAll = 1;
+
+const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
+  const {
+    height,
+    width,
+    timeRange,
+    timeZone,
+    data,
+    options,
+    eventBus,
+    onChangeTimeRange,
+    replaceVariables,
+    fieldConfig,
+    id,
+    transparent,
+    title,
+    renderCounter,
+    onFieldConfigChange,
+  } = props;
+  const theme = useTheme2();
   const showLogsqlTextarea = options?.showLogsqlTextarea ?? true;
   const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
+  const panelWidth = width ?? 0;
+  const timeSeriesHeight = 180;
+  const pieChartWidth = panelWidth > 0 ? Math.max(240, Math.floor(panelWidth * 0.3)) : 240;
+  const timeSeriesWidth = Math.max(0, panelWidth - pieChartWidth - 12);
+  const [stepValue, setStepValue] = useState<string>(() => {
+    try {
+      return locationService.getSearch().get('var-step') ?? '1m';
+    } catch {
+      return '1m';
+    }
+  });
   const [fullTextSearch, setFullTextSearch] = useState<string>('');
   const [fullTextSearchOperator, setFullTextSearchOperator] = useState<string | null>(null);
   const [fullTextSearchEnabled, setFullTextSearchEnabled] = useState<boolean>(false);
@@ -89,9 +469,16 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const [testResult, setTestResult] = useState<string>('');
   const [testError, setTestError] = useState<string>('');
   const [datasourceUid, setDatasourceUid] = useState<string | null>(null);
+  const [datasourceId, setDatasourceId] = useState<number | null>(null);
   const [filterByStreamFields, setFilterByStreamFields] = useState<boolean>(true);
+  const [logsqlValue, setLogsqlValue] = useState<string>('');
+  const [logsExpandAll, setLogsExpandAll] = useState<boolean>(false);
+  const [logSearchInput, setLogSearchInput] = useState<string>('');
+  const [logHighlightTerm, setLogHighlightTerm] = useState<string>('');
+  const [logTagsWrap, setLogTagsWrap] = useState<boolean>(true);
   const timeRangeRef = useRef<TimeRange | undefined>(timeRange);
   const datasourceVarValueRef = useRef<string | null>(null);
+  const logsqlVarValueRef = useRef<string>('');
   const valueSelectRoots = useMemo(() => new WeakMap<HTMLElement, Root>(), []);
   const streamFieldMapRef = useRef<Record<string, null>>({});
   const fieldMapRef = useRef<Record<string, any>>({});  // 第一次查询得到的 field names 列表
@@ -101,6 +488,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   const msgFiltersRef = useRef<Record<string, Filter>>({});
   const fulltextFiltersRef = useRef<Record<string, Filter>>({});
   const jsonConfigRef = useRef<JsonConfigShape | null>(null);  // 存在面板配置中的 json config
+  const [timeSeriesFrames, setTimeSeriesFrames] = useState<DataFrame[]>([]);
+  const [logsFrames, setLogsFrames] = useState<DataFrame[]>([]);
+  const [logsLoading, setLogsLoading] = useState<boolean>(false);
+  const [logsError, setLogsError] = useState<string>('');
+  const [selectedSeries, setSelectedSeries] = useState<DataFrameFieldIndex | null>(null);
+  const [pieTooltip, setPieTooltip] = useState<PieTooltipState | null>(null);
   // 根据顺序进行加载的 stream field 数据
   const streamFieldIndexMapRef = useRef<Record<number, string>>({});
   const defaultFieldOperatorOptions: Option[] = [
@@ -124,6 +517,226 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   ];
   //let hasLogsqlAtUrl = false;
   let firstTimeLogsql = '';  // 刚刚加载面板时候得到的 logsql
+
+  const pieChartData = useMemo(() => {
+    const fieldDisplayValues = getFieldDisplayValues({
+      fieldConfig: pieChartFieldConfig,
+      reduceOptions: pieChartOptions.reduceOptions,
+      data: timeSeriesFrames,
+      theme,
+      replaceVariables,
+      timeZone,
+    });
+    if (!fieldDisplayValues.length) {
+      return { slices: [] as PieSlice[], total: 0 };
+    }
+    const slices: Array<Omit<PieSlice, 'percent' | 'displayPercent'>> = [];
+    let total = 0;
+    for (let i = 0; i < fieldDisplayValues.length; i++) {
+      const item = fieldDisplayValues[i];
+      const value = Number(item.display.numeric);
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+      if (pieChartOptions.tooltip.hideZeros && value <= 0) {
+        continue;
+      }
+      const label = item.display.title ?? item.name ?? `Series ${i + 1}`;
+      const palette = theme.visualization.palette;
+      const paletteColor = palette[i % palette.length] ?? FALLBACK_COLOR;
+      const rawColor = item.display.color ?? theme.visualization.getColorByName(paletteColor);
+      const color = adjustColor(rawColor, -0.2);
+      const hoverColor = rawColor;
+      slices.push({
+        label,
+        value,
+        color,
+        hoverColor,
+        displayValue: formattedValueToString(item.display),
+      });
+      total += value;
+    }
+    if (!Number.isFinite(total) || total <= 0) {
+      return { slices: [] as PieSlice[], total: 0 };
+    }
+    if (pieChartOptions.tooltip.sort === 'desc') {
+      slices.sort((a, b) => b.value - a.value);
+    } else if (pieChartOptions.tooltip.sort === 'asc') {
+      slices.sort((a, b) => a.value - b.value);
+    }
+    const finalSlices = slices.map((slice) => {
+      const percent = (slice.value / total) * 100;
+      return {
+        ...slice,
+        percent,
+        displayPercent: `${percent.toFixed(1)}%`,
+      };
+    });
+    return { slices: finalSlices, total };
+  }, [replaceVariables, theme, timeSeriesFrames, timeZone]);
+
+  const timeSeriesLegendItems = useMemo(() => {
+    const items: TimeSeriesLegendItem[] = [];
+    timeSeriesFrames.forEach((frame, frameIndex) => {
+      frame.fields.forEach((field, fieldIndex) => {
+        if (field.type !== FieldType.number && field.type !== FieldType.enum) {
+          return;
+        }
+        if (field.config?.custom?.hideFrom?.legend) {
+          return;
+        }
+        const label = getFieldDisplayName(field, frame, timeSeriesFrames);
+        const seriesColor = getFieldSeriesColor(field, theme).color ?? FALLBACK_COLOR;
+        items.push({
+          label,
+          color: seriesColor,
+          fieldIndex: { frameIndex, fieldIndex },
+        });
+      });
+    });
+    return items;
+  }, [theme, timeSeriesFrames]);
+
+  const timeSeriesFramesForViz = useMemo(() => {
+    if (!selectedSeries) {
+      return timeSeriesFrames;
+    }
+    return timeSeriesFrames.map((frame, frameIndex) => {
+      const nextFields = frame.fields.map((field, fieldIndex) => {
+        if (field.type !== FieldType.number && field.type !== FieldType.enum) {
+          return field;
+        }
+        const shouldShow = frameIndex === selectedSeries.frameIndex && fieldIndex === selectedSeries.fieldIndex;
+        const currentHideFrom = field.config?.custom?.hideFrom;
+        const nextHideFrom = {
+          ...currentHideFrom,
+          viz: shouldShow ? currentHideFrom?.viz ?? false : true,
+        };
+        return {
+          ...field,
+          config: {
+            ...field.config,
+            custom: {
+              ...(field.config?.custom ?? {}),
+              hideFrom: nextHideFrom,
+            },
+          },
+        };
+      });
+      return { ...frame, fields: nextFields };
+    });
+  }, [selectedSeries, timeSeriesFrames]);
+
+  useEffect(() => {
+    if (!selectedSeries) {
+      return;
+    }
+    const isValid = timeSeriesLegendItems.some(
+      (item) =>
+        item.fieldIndex.frameIndex === selectedSeries.frameIndex &&
+        item.fieldIndex.fieldIndex === selectedSeries.fieldIndex
+    );
+    if (!isValid) {
+      setSelectedSeries(null);
+    }
+  }, [selectedSeries, timeSeriesLegendItems]);
+
+  const updatePieTooltip = useCallback((event: React.MouseEvent<SVGPathElement>, slice: PieSlice) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) {
+      return;
+    }
+    const rect = svg.getBoundingClientRect();
+    setPieTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      label: slice.label,
+      color: slice.hoverColor,
+      displayValue: slice.displayValue,
+      displayPercent: slice.displayPercent,
+    });
+  }, []);
+
+  const clearPieTooltip = useCallback(() => {
+    setPieTooltip(null);
+  }, []);
+
+  const onLogsPanelOptionsChange = useCallback((_next: LogsPanelOptions) => {
+    // Logs panel options are fixed for this custom panel.
+  }, []);
+
+  const onLegendItemClick = useCallback((item: TimeSeriesLegendItem) => {
+    setSelectedSeries((prev) => {
+      if (prev && prev.frameIndex === item.fieldIndex.frameIndex && prev.fieldIndex === item.fieldIndex.fieldIndex) {
+        return null;
+      }
+      return { ...item.fieldIndex };
+    });
+  }, []);
+
+  const onQueryZoom = useCallback(
+    (range: { from: number; to: number }) => {
+      const from = Math.min(range.from, range.to);
+      const to = Math.max(range.from, range.to);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) {
+        return;
+      }
+      onChangeTimeRange({ from, to });
+    },
+    [onChangeTimeRange]
+  );
+
+  const timeSeriesLegendHeight = timeSeriesLegendItems.length > 0 ? 56 : 0;
+  const timeSeriesPlotHeight = Math.max(0, timeSeriesHeight - timeSeriesLegendHeight);
+  const logsMaxLines = useMemo(() => {
+    if (limitEnabled) {
+      const num = Number(limitValue);
+      if (Number.isFinite(num) && num > 0) {
+        return Math.floor(num);
+      }
+    }
+    return 1000;
+  }, [limitEnabled, limitValue]);
+
+  const logsPanelData = useMemo<PanelData>(() => {
+    const target = {
+      datasource: datasourceUid ? { type: 'victoriametrics-logs-datasource', uid: datasourceUid } : undefined,
+      editorMode: 'code',
+      expr: logsqlValue,
+      queryType: 'instant',
+      refId: 'A',
+    };
+    const baseRequest = data.request;
+    const interval = stepValue || baseRequest?.interval || '1m';
+    const intervalMs = getIntervalMsFromStep(stepValue) ?? baseRequest?.intervalMs ?? 0;
+    const app = baseRequest?.app ?? CoreApp.Dashboard;
+    const request: DataQueryRequest = baseRequest
+      ? {
+          ...baseRequest,
+          app,
+          targets: [target],
+        }
+      : {
+          app,
+          requestId: 'log-filter-logs',
+          interval,
+          intervalMs,
+          range: timeRange,
+          scopedVars: data.request?.scopedVars ?? {},
+          targets: [target],
+          timezone: timeZone,
+          startTime: Date.now(),
+        };
+    return {
+      ...data,
+      series: logsFrames,
+      state: logsLoading ? LoadingState.Loading : logsError ? LoadingState.Error : LoadingState.Done,
+      timeRange,
+      request,
+      error: logsError ? ({ message: logsError } as any) : undefined,
+      errors: logsError ? ([{ message: logsError }] as any) : undefined,
+    };
+  }, [data, datasourceUid, logsqlValue, logsFrames, logsLoading, logsError, stepValue, timeRange, timeZone]);
 
   // 设置一个 select 控件的选项
   const setSelectOptions = (id: string, options: Option[]) => {
@@ -174,6 +787,342 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     generateLogsQL(true);
   };
 
+  // 查询当前的数据源 id
+  const resolveDatasourceUid = useCallback(async (): Promise<string | null> => {
+    const targets = (data as any)?.request?.targets;
+    let datasourceFromVar: string | null = null;
+    try {
+      datasourceFromVar = datasourceVarValueRef.current ?? locationService.getSearch().get('var-datasource');
+    } catch (err) {
+      console.error('resolveDatasourceUid: failed to read datasource variable', err);
+    }
+    let uid =
+      datasourceUid ??
+      targets?.[0]?.datasource?.uid ??
+      (window as any)?.__grafanaSceneContext?.meta?.data?.request?.targets?.[0]?.datasource?.uid ??
+      (window as any)?.__grafana_data?.request?.targets?.[0]?.datasource?.uid;
+
+    if (uid) {
+      setDatasourceUid(uid);
+      return uid;
+    }
+
+    try {
+      const list = await getBackendSrv().get('/api/datasources');
+      if (datasourceFromVar) {
+        uid = list?.find?.((ds: any) => ds.uid === datasourceFromVar || ds.name === datasourceFromVar)?.uid;
+      }
+      if (!uid) {
+        uid = list?.find?.((ds: any) => ds.type === 'victoriametrics-logs-datasource')?.uid;
+      }
+      if (uid) {
+        setDatasourceUid(uid);
+        return uid;
+      }
+    } catch (err) {
+      console.error('resolveDatasourceUid: failed to list datasources', err);
+    }
+
+    setTestError('Could not resolve datasource uid');
+    setTestResult('');
+    return null;
+  }, [data, datasourceUid]);
+
+  const resolveDatasourceId = useCallback(
+    async (uid: string | null): Promise<number | null> => {
+      if (datasourceId != null) {
+        return datasourceId;
+      }
+      const targets = (data as any)?.request?.targets;
+      const idFromTargets =
+        targets?.[0]?.datasource?.id ??
+        (window as any)?.__grafanaSceneContext?.meta?.data?.request?.targets?.[0]?.datasource?.id ??
+        (window as any)?.__grafana_data?.request?.targets?.[0]?.datasource?.id;
+      if (Number.isFinite(idFromTargets)) {
+        const numericId = Number(idFromTargets);
+        setDatasourceId(numericId);
+        return numericId;
+      }
+      if (!uid) {
+        return null;
+      }
+      try {
+        const ds = await getBackendSrv().get(`/api/datasources/uid/${uid}`);
+        const id = ds?.id;
+        if (Number.isFinite(id)) {
+          const numericId = Number(id);
+          setDatasourceId(numericId);
+          return numericId;
+        }
+      } catch (err) {
+        console.error('resolveDatasourceId: failed to get datasource', err);
+      }
+      return null;
+    },
+    [data, datasourceId]
+  );
+
+  // 通过 tips 查询，填充 Time Series 数据
+  const loadTimeSeriesData = useCallback(async (stepOverride?: string): Promise<DataFrame[]> => {
+    const startTs = timeRangeRef.current?.from?.valueOf();
+    const endTs = timeRangeRef.current?.to?.valueOf();
+    const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
+    const logsql = logsqlEl?.value ?? '';
+    const dsUid = await resolveDatasourceUid();
+    const dsId = await resolveDatasourceId(dsUid);
+    let intervalMsFromStep: number | undefined;
+    try {
+      const stepFromUrl = locationService.getSearch().get('var-step');
+      intervalMsFromStep =
+        getIntervalMsFromStep(stepOverride ?? stepValue) ??
+        getIntervalMsFromStep(stepFromUrl ?? undefined);
+    } catch {
+      intervalMsFromStep = getIntervalMsFromStep(stepOverride ?? stepValue);
+    }
+    const fallbackIntervalMs = (data as any)?.request?.intervalMs ?? 60000;
+    const intervalMs = intervalMsFromStep ?? fallbackIntervalMs;
+
+    if (!startTs || !endTs || !logsql || !dsUid) {
+      setTimeSeriesFrames([]);
+      return [];
+    }
+
+    const body = {
+      queries: [
+        {
+          datasource: { type: 'victoriametrics-logs-datasource', uid: dsUid },
+          datasourceId: dsId ?? 0,
+          editorMode: 'code',
+          expr: logsql,
+          fields: timeSeriesQueryFields,
+          legendFormat: '',
+          queryType: 'hits',
+          refId: 'A',
+          maxLines: 1000,
+          intervalMs,
+          maxDataPoints: 2221,
+          //maxDataPoints: (data as any)?.request?.maxDataPoints ?? 500,
+        },
+      ],
+      from: String(startTs),
+      to: String(endTs),
+    };
+
+    try {
+      const requestId = `SQR${Math.random().toString(36).slice(2, 10)}`;
+      const resp = await getBackendSrv().post(
+        `/api/ds/query?ds_type=victoriametrics-logs-datasource&requestId=${requestId}`, // 调用后端查询接口
+        body // 查询请求体
+      );
+      const frames = resp?.results?.A?.frames; // 提取数据帧
+      if (Array.isArray(frames)) {
+        showJSLog('loadTimeSeriesData: got frames', 'green');
+        const parsed = frames.map((f: any) => toDataFrame(f)); // 将返回数据转为 DataFrame
+        let seriesIndex = 0;
+        const configured = parsed.map((frame) => {
+          const decodedFrameName = decodeLegendLabel(frame.name, timeSeriesQueryFields);
+          const cfgFields = frame.fields.map((fld: any) => {
+            const mergedCustom = {
+              ...(logVolumeFieldConfig.custom ?? {}),
+              ...(fld?.config?.custom ?? {}),
+              axisCenteredZero: logVolumeFieldConfig.custom?.axisCenteredZero,
+              //axisSoftMin: undefined,
+              //axisSoftMax: undefined,
+              drawStyle: logVolumeFieldConfig.custom?.drawStyle,
+              stacking: logVolumeFieldConfig.custom?.stacking,
+              scaleDistribution: logVolumeFieldConfig.custom?.scaleDistribution,
+            }; // 合并并覆盖关键配置
+            const decodedDisplayName = decodeLegendLabel(fld?.config?.displayNameFromDS, timeSeriesQueryFields);
+            const nextField = {
+              ...fld, // 保留原字段
+              config: {
+                ...logVolumeFieldConfig, // 应用默认字段配置
+                ...(fld?.config ?? {}), // 覆盖已有配置
+                displayNameFromDS: decodedDisplayName ?? fld?.config?.displayNameFromDS,
+                color: logVolumeFieldConfig.color,
+                //min: undefined,
+                //max: undefined,
+                noValue: logVolumeFieldConfig.noValue,
+                custom: mergedCustom, // 使用合并后的 custom
+              },
+            };
+            if (nextField.type === FieldType.time) {
+              nextField.config = {
+                ...nextField.config,
+                interval: intervalMs,
+              };
+            }
+            if (nextField.type === FieldType.number || nextField.type === FieldType.enum) {
+              nextField.state = { ...(nextField.state ?? {}), seriesIndex };
+              seriesIndex += 1;
+            }
+            return {
+              ...nextField,
+              display: getDisplayProcessor({ field: nextField, timeZone, theme }),
+            };
+          }); // 结束字段映射
+          return {
+            ...frame, // 返回调整后的 frame
+            name: decodedFrameName ?? frame.name, // 设置新的名称
+            fields: cfgFields, // 使用带配置的字段
+          };
+        }); // 结束 frame 映射
+        setTimeSeriesFrames(configured); // 更新状态用于渲染
+        setTestError(''); // 清除错误提示
+        return configured; // 返回处理后的数据
+      }
+      setTimeSeriesFrames([]); // 非数组则清空
+      return []; // 返回空数组
+    } catch (err: any) {
+      console.error('loadTimeSeriesData failed', err); // 打印错误
+      setTimeSeriesFrames([]); // 出错时清空数据
+      setTestError(err?.statusText ?? 'Failed to load time series data'); // 展示错误信息
+      return []; // 返回空数组
+    }
+  }, [data, resolveDatasourceUid, resolveDatasourceId, stepValue, theme, timeZone]);
+
+  const loadLogsData = useCallback(
+    async (logsqlOverride?: string): Promise<DataFrame[]> => {
+      const startTs = timeRangeRef.current?.from?.valueOf();
+      const endTs = timeRangeRef.current?.to?.valueOf();
+      const dsUid = await resolveDatasourceUid();
+      const dsId = await resolveDatasourceId(dsUid);
+      const logsql = (logsqlOverride ?? getLogsqlFromURL()).trim();
+
+      if (!startTs || !endTs || !logsql || !dsUid) {
+        setLogsFrames([]);
+        setLogsError('');
+        setLogsLoading(false);
+        return [];
+      }
+
+      setLogsLoading(true);
+      setLogsError('');
+
+      const body = {
+        queries: [
+          {
+            datasource: { type: 'victoriametrics-logs-datasource', uid: dsUid },
+            datasourceId: dsId ?? 0,
+            editorMode: 'code',
+            expr: logsql,
+            queryType: 'instant',
+            refId: 'A',
+            maxLines: logsMaxLines,
+          },
+        ],
+        from: String(startTs),
+        to: String(endTs),
+      };
+
+      try {
+        const requestId = `SQR${Math.random().toString(36).slice(2, 10)}`;
+        const resp = await getBackendSrv().post(
+          `/api/ds/query?ds_type=victoriametrics-logs-datasource&requestId=${requestId}`,
+          body
+        );
+        const frames = resp?.results?.A?.frames;
+        if (Array.isArray(frames)) {
+          const parsed = frames.map((f: any) => toDataFrame(f));
+          setLogsFrames(parsed);
+          return parsed;
+        }
+        setLogsFrames([]);
+        return [];
+      } catch (err: any) {
+        console.error('loadLogsData failed', err);
+        setLogsError(err?.statusText ?? 'Failed to load logs');
+        setLogsFrames([]);
+        return [];
+      } finally {
+        setLogsLoading(false);
+      }
+    },
+    [logsMaxLines, logsqlVariable, resolveDatasourceId, resolveDatasourceUid]
+  );
+
+  // 步长变化时的处理
+  const onStepValueChanged = useCallback(
+    (nextValue: string) => {
+      if (!nextValue) {
+        return;
+      }
+      try {
+        locationService.partial({ 'var-step': nextValue }, true);
+      } catch (err) {
+        console.error('update step value failed', err);
+      }
+      void loadTimeSeriesData(nextValue);
+    },
+    [loadTimeSeriesData]
+  );
+
+  const onStepComboboxChange = useCallback(
+    (option: ComboboxOption<string>) => {
+      const nextValue = option?.value ?? '1m';
+      setStepValue(nextValue);
+      onStepValueChanged(nextValue);
+    },
+    [onStepValueChanged]
+  );
+
+  useEffect(() => {
+    void loadTimeSeriesData();
+  }, [loadTimeSeriesData]);
+
+  useEffect(() => {
+    const getLogsqlVarKey = () => {
+      let varKey = `var-${logsqlVariable}`;
+      if (logsqlVariable.startsWith('$')) {
+        varKey = `var-` + logsqlVariable.substring(1);
+      }
+      return varKey;
+    };
+
+    const readLogsqlVariable = () => {
+      const varKey = getLogsqlVarKey();
+      try {
+        return locationService.getSearch().get(varKey) ?? '';
+      } catch (err) {
+        console.error('read logsql variable from url failed', err);
+        return '';
+      }
+    };
+
+    const syncLogsqlValue = (value: string) => {
+      logsqlVarValueRef.current = value;
+      setLogsqlValue(value);
+      const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
+      if (logsqlEl && logsqlEl.value !== value) {
+        logsqlEl.value = value;
+      }
+      if (!value) {
+        setLogsFrames([]);
+        setLogsError('');
+        setLogsLoading(false);
+        setTimeSeriesFrames([]);
+        return;
+      }
+      void loadLogsData(value);
+      void loadTimeSeriesData();
+    };
+
+    const initialValue = readLogsqlVariable();
+    if (initialValue !== logsqlVarValueRef.current) {
+      syncLogsqlValue(initialValue);
+    }
+
+    const subscription = locationService.getLocationObservable().subscribe(() => {
+      const currentValue = readLogsqlVariable();
+      if (currentValue === logsqlVarValueRef.current) {
+        return;
+      }
+      syncLogsqlValue(currentValue);
+    });
+
+    return () => subscription.unsubscribe();
+  }, [loadLogsData, loadTimeSeriesData, logsqlVariable]);
+
   useEffect(() => {
     showJSLog('useEffect: []', 'orange');
     setTestError('');
@@ -187,7 +1136,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       }
     };
 
-    if (firstTimeLogsql.length===0){
+    if (firstTimeLogsql.length === 0) {
       firstTimeLogsql = getLogsqlFromURL();
     }
 
@@ -292,10 +1241,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
     const s = logsql.value;
     const re = /^\s*_time:\[[^\]]*\].*/g;
-    if (re.test(s)){
+    if (re.test(s)) {
       showJSLog('found 1', 'green');
       const idx = s.indexOf(']');
-      if (idx!=-1){
+      if (idx != -1) {
         showJSLog('found 2', 'green');
         const sb = createStringBuilder();
         const rawFrom = timeRangeRef.current?.raw?.from;
@@ -309,7 +1258,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
           sb.append(endStr);
           sb.append(']');
         }
-        logsql.value = sb.toString() + s.substring(idx+1);
+        logsql.value = sb.toString() + s.substring(idx + 1);
         return;
       }
     } else {
@@ -433,7 +1382,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
   }
 
   // 根据几个全局的 map, 生成 logsQL 语句
-  const generateLogsQL = (force:boolean) => {
+  const generateLogsQL = (force: boolean) => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
     if (!logsql) {
       return;
@@ -441,12 +1390,12 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     //
     const streamFilters = streamFiltersRef.current;
     const fieldFilters = fieldFiltersRef.current;
-    if (!force){
+    if (!force) {
       const logsqlFromURL = getLogsqlFromURL();
-      if (logsqlFromURL.length > 0 && 
-          logsqlFromURL===firstTimeLogsql && 
-          Object.keys(streamFilters).length === 0 && 
-          Object.keys(fieldFilters).length === 0) {
+      if (logsqlFromURL.length > 0 &&
+        logsqlFromURL === firstTimeLogsql &&
+        Object.keys(streamFilters).length === 0 &&
+        Object.keys(fieldFilters).length === 0) {
         //hasLogsqlAtUrl = false;
         //logsql.value = "";
         //setTestError('not generate logsql');
@@ -797,6 +1746,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     }
   };
 
+  // 点击测试按钮
   const onLogsqlTest = () => {
     const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
     const startTs = timeRangeRef.current?.from?.valueOf();
@@ -832,6 +1782,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
         switch (status) {
           case 200:
             {
+              // 显示 hits 结果的第一条记录的时间和值
               const frames = resp?.results?.A?.frames;
               let formatted = '';
               if (Array.isArray(frames) && frames.length > 0) {
@@ -893,45 +1844,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     loadFieldNamesDynamic();
-  };
-
-  // 查询当前的数据源 id
-  const resolveDatasourceUid = async (): Promise<string | null> => {
-    const targets = (data as any)?.request?.targets;
-    let datasourceFromVar: string | null = null;
-    try {
-      datasourceFromVar = datasourceVarValueRef.current ?? locationService.getSearch().get('var-datasource');
-    } catch (err) {
-      console.error('resolveDatasourceUid: failed to read datasource variable', err);
-    }
-    let uid =
-      datasourceUid ??
-      targets?.[0]?.datasource?.uid ??
-      (window as any)?.__grafanaSceneContext?.meta?.data?.request?.targets?.[0]?.datasource?.uid ??
-      (window as any)?.__grafana_data?.request?.targets?.[0]?.datasource?.uid;
-
-    if (uid) {
-      setDatasourceUid(uid);
-      return uid;
-    }
-
-    try {
-      const list = await getBackendSrv().get('/api/datasources');
-      if (datasourceFromVar) {
-        uid = list?.find?.((ds: any) => ds.uid === datasourceFromVar || ds.name === datasourceFromVar)?.uid;
-      }
-      if (!uid) {
-        uid = list?.find?.((ds: any) => ds.type === 'victoriametrics-logs-datasource')?.uid;
-      }
-      if (uid) {
-        setDatasourceUid(uid);
-        return uid;
-      }
-    } catch (err) {
-      console.error('resolveDatasourceUid: failed to list datasources', err);
-    }
-
-    return null;
   };
 
   const renderValueSelectForWrapper = (
@@ -1259,6 +2171,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       setTestError('logsql is empty');
       return;
     }
+    setLogsqlValue(logsql);
     const varName: Record<string, any> = {};
     // 根据配置中的变量名来输出
     let varKey = `var-${logsqlVariable}`;
@@ -1268,6 +2181,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
     varName[varKey] = logsql;
     locationService.partial(varName, true);
     setTestResult('Query applied and dashboard refresh triggered');
+    if (logsqlVarValueRef.current === logsql) {
+      void loadTimeSeriesData();
+      void loadLogsData(logsql);
+    }
   };
 
   const getStartRange = () => {
@@ -1675,7 +2592,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
       return;
     }
     const newNode = document.createElement("DIV");
-    newNode.innerText = formattedTime + ' '+ s;
+    newNode.innerText = formattedTime + ' ' + s;
     if (color.length > 0) {
       newNode.style.color = color;
     }
@@ -1983,12 +2900,411 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = ({ height, timeRa
                 </div>
                 <div id="testResult">{testResult}</div>
                 <div style={{ color: 'red' }}>{testError}</div>
-                <div id="jslog" style={{ border: 0, height: '200px', maxHeight: '200px', overflow: 'scroll', display: 'none' }}></div>
+                <div id="jslog" style={{ border: 0, height: '200px', maxHeight: '200px', overflow: 'scroll', display: 'block' }}></div>
               </div>
             </td>
           </tr>
         </tbody>
       </table>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+        <label htmlFor="step-combobox" style={{ whiteSpace: 'nowrap' }}>
+          Step:
+        </label>
+        <Combobox
+          id="step-combobox"
+          width={20}
+          options={stepComboboxOptions}
+          value={stepValue}
+          createCustomValue={false}
+          onChange={onStepComboboxChange}
+          placeholder="1m"
+        />
+      </div>
+      <div style={{ width: '100%', height: `${timeSeriesHeight}px`, marginTop: '12px', display: 'flex', gap: '12px' }}>
+        <div style={{ flex: '1 1 auto', minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+          {timeSeriesFrames.length > 0 && timeSeriesWidth > 0 ? (
+            <>
+              <div style={{ flex: '1 1 auto', minHeight: 0 }}>
+                <TimeSeries
+                  width={timeSeriesWidth}
+                  height={timeSeriesPlotHeight}
+                  frames={timeSeriesFramesForViz}
+                  timeRange={timeRange}
+                  timeZone={timeZone}
+                  legend={timeSeriesLegend}
+                  options={logVolumeVizOptions}
+                >
+                  {(config, alignedFrame) => {
+                    const renderTooltip = (_u: unknown, dataIdxs: Array<number | null>, seriesIdx: number | null) => {
+                      if (!alignedFrame?.fields?.length) {
+                        return null;
+                      }
+                      const xField = alignedFrame.fields[0];
+                      if (!xField) {
+                        return null;
+                      }
+                      let xIdx: number | null = null;
+                      if (seriesIdx != null && dataIdxs[seriesIdx] != null) {
+                        xIdx = dataIdxs[seriesIdx];
+                      } else {
+                        for (let i = 1; i < alignedFrame.fields.length; i++) {
+                          const idx = dataIdxs[i];
+                          if (idx != null) {
+                            xIdx = idx;
+                            break;
+                          }
+                        }
+                      }
+                      if (xIdx == null) {
+                        return null;
+                      }
+                      const xDisplay = xField.display ?? getDisplayProcessor({ field: xField, timeZone, theme });
+                      const timestamp = formattedValueToString(xDisplay(xField.values[xIdx]));
+                      const series = [];
+                      for (let i = 1; i < alignedFrame.fields.length; i++) {
+                        const field = alignedFrame.fields[i];
+                        if (!field) {
+                          continue;
+                        }
+                        if (field.type !== FieldType.number && field.type !== FieldType.enum) {
+                          continue;
+                        }
+                        if (field.config?.custom?.hideFrom?.tooltip || field.config?.custom?.hideFrom?.viz) {
+                          continue;
+                        }
+                        const display = (field.display ?? getDisplayProcessor({ field, timeZone, theme }))(field.values[xIdx]);
+                        series.push({
+                          color: display.color ?? FALLBACK_COLOR,
+                          label: getFieldDisplayName(field, alignedFrame, timeSeriesFrames),
+                          value: formattedValueToString(display),
+                          isActive: seriesIdx === i,
+                        });
+                      }
+                      if (!series.length) {
+                        return null;
+                      }
+                      return <SeriesTable timestamp={timestamp} series={series} />;
+                    };
+                    return (
+                      <TooltipPlugin2
+                        config={config}
+                        hoverMode={tooltipHoverModeAll}
+                        queryZoom={onQueryZoom}
+                        render={renderTooltip}
+                      />
+                    );
+                  }}
+                </TimeSeries>
+              </div>
+              {timeSeriesLegendItems.length > 0 && (
+                <div
+                  style={{
+                    flex: '0 0 auto',
+                    height: `${timeSeriesLegendHeight}px`,
+                    overflowY: 'auto',
+                    padding: '4px 8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', alignItems: 'center' }}>
+                    {timeSeriesLegendItems.map((item) => {
+                      const isSelected =
+                        selectedSeries?.frameIndex === item.fieldIndex.frameIndex &&
+                        selectedSeries?.fieldIndex === item.fieldIndex.fieldIndex;
+                      const isDimmed = Boolean(selectedSeries) && !isSelected;
+                      return (
+                        <button
+                          key={`${item.fieldIndex.frameIndex}-${item.fieldIndex.fieldIndex}`}
+                          type="button"
+                          title={item.label}
+                          aria-pressed={isSelected}
+                          onClick={() => onLegendItemClick(item)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            cursor: 'pointer',
+                            color: isDimmed ? theme.colors.text.secondary : theme.colors.text.primary,
+                            opacity: isDimmed ? 0.6 : 1,
+                            fontWeight: isSelected ? 600 : 400,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          <SeriesIcon color={item.color} />
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                border: '1px solid #ddd',
+              }}
+            >
+              No time series data
+            </div>
+          )}
+        </div>
+        <div
+          style={{
+            flex: '0 0 auto',
+            width: `${pieChartWidth}px`,
+            height: '100%',
+            padding: '8px',
+            boxSizing: 'border-box',
+          }}
+        >
+          {pieChartData.slices.length > 0 ? (
+            <VizLayout
+              width={pieChartWidth - 16}
+              height={timeSeriesHeight - 16}
+              legend={
+                pieChartOptions.legend.showLegend ? (
+                  <VizLayout.Legend placement={pieChartOptions.legend.placement}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        paddingRight: '5px',
+                      }}
+                    >
+                      {pieChartData.slices.map((slice) => {
+                        const showPercent = pieChartOptions.legend.values.includes('percent');
+                        const showValue = pieChartOptions.legend.values.includes('value');
+                        const columns = [
+                          'auto',
+                          'minmax(0, 1fr)',
+                          showValue ? 'minmax(72px, auto)' : '',
+                          showPercent ? 'minmax(64px, auto)' : '',
+                        ].filter(Boolean).join(' ');
+                        return (
+                          <div
+                            key={slice.label}
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: columns,
+                              columnGap: '12px',
+                              alignItems: 'center',
+                              padding: '2px 0',
+                            }}
+                          >
+                            <SeriesIcon color={slice.color} />
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {slice.label}
+                            </div>
+                            {showValue && (
+                              <div
+                                style={{
+                                  textAlign: 'right',
+                                  fontVariantNumeric: 'tabular-nums',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {slice.displayValue}
+                              </div>
+                            )}
+                            {showPercent && (
+                              <div
+                                style={{
+                                  textAlign: 'right',
+                                  fontVariantNumeric: 'tabular-nums',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {slice.displayPercent}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </VizLayout.Legend>
+                ) : null
+              }
+            >
+              {(vizWidth: number, vizHeight: number) => {
+                const size = Math.min(vizWidth, vizHeight);
+                const radius = Math.max(0, size / 2 - 4);
+                const cx = vizWidth / 2;
+                const cy = vizHeight / 2;
+                const labelRadius = Math.max(0, radius * 0.65);
+                const labelFontSize = Math.max(9, Math.min(12, radius * 0.12));
+                const tooltipOffset = 10;
+                const tooltipWidth = 220;
+                const tooltipHeight = 56;
+                const tooltipX = pieTooltip
+                  ? Math.min(Math.max(pieTooltip.x + tooltipOffset, 0), Math.max(0, vizWidth - tooltipWidth))
+                  : 0;
+                const tooltipY = pieTooltip
+                  ? Math.min(Math.max(pieTooltip.y + tooltipOffset, 0), Math.max(0, vizHeight - tooltipHeight))
+                  : 0;
+                let cumulative = 0;
+                return (
+                  <div
+                    style={{ width: vizWidth, height: vizHeight, position: 'relative' }}
+                    onMouseLeave={clearPieTooltip}
+                  >
+                    <svg width={vizWidth} height={vizHeight} viewBox={`0 0 ${vizWidth} ${vizHeight}`}>
+                      {pieChartData.slices.map((slice) => {
+                        const startAngle = (cumulative / pieChartData.total) * 360 - 90;
+                        const endAngle = ((cumulative + slice.value) / pieChartData.total) * 360 - 90;
+                        const midAngle = (startAngle + endAngle) / 2;
+                        const labelPos = polarToCartesian(cx, cy, labelRadius, midAngle);
+                        const isHovered = pieTooltip?.label === slice.label;
+                        const fillColor = isHovered ? slice.hoverColor : slice.color;
+                        cumulative += slice.value;
+                        return (
+                          <g key={slice.label}>
+                            <path
+                              d={describeArc(cx, cy, radius, startAngle, endAngle)}
+                              fill={fillColor}
+                              stroke={theme.colors.background.primary}
+                              strokeWidth={1}
+                              onMouseMove={(event) => updatePieTooltip(event, slice)}
+                              onMouseEnter={(event) => updatePieTooltip(event, slice)}
+                              onMouseLeave={clearPieTooltip}
+                            />
+                            <text
+                              x={labelPos.x}
+                              y={labelPos.y}
+                              textAnchor="middle"
+                              dominantBaseline="middle"
+                              style={{
+                                fontSize: `${labelFontSize}px`,
+                                fontWeight: 500,
+                                fill: theme.colors.text.primary,
+                                stroke: theme.colors.background.primary,
+                                strokeWidth: 3,
+                                paintOrder: 'stroke',
+                                pointerEvents: 'none',
+                              }}
+                            >
+                              <tspan x={labelPos.x} dy="-0.35em">
+                                {slice.displayValue}
+                              </tspan>
+                              <tspan x={labelPos.x} dy="1.2em">
+                                {slice.displayPercent}
+                              </tspan>
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                    {pieTooltip && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: tooltipX,
+                          top: tooltipY,
+                          pointerEvents: 'none',
+                          maxWidth: `${tooltipWidth}px`,
+                          padding: '6px 8px',
+                          borderRadius: '4px',
+                          background: theme.colors.background.primary,
+                          color: theme.colors.text.primary,
+                          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
+                          fontSize: '12px',
+                          lineHeight: 1.4,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+                          <SeriesIcon color={pieTooltip.color} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{pieTooltip.label}</span>
+                        </div>
+                        <div style={{ marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                          {pieTooltip.displayValue} ({pieTooltip.displayPercent})
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }}
+            </VizLayout>
+          ) : (
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              No pie chart data
+            </div>
+          )}
+        </div>
+      </div>
+      <hr />
+      <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span>show/hide</span>
+        <Switch
+          value={logsExpandAll}
+          onChange={(event) => {
+            setLogsExpandAll(event.currentTarget.checked);
+          }}
+        />
+        <span>word wrap</span>
+        <Switch
+          value={logTagsWrap}
+          onChange={(event) => {
+            setLogTagsWrap(event.currentTarget.checked);
+          }}
+        />
+        <input
+          type="text"
+          value={logSearchInput}
+          onChange={(event) => setLogSearchInput(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              const term = logSearchInput.trim();
+              setLogHighlightTerm(term);
+            }
+          }}
+          onBlur={() => {
+            const term = logSearchInput.trim();
+            setLogHighlightTerm(term);
+          }}
+          placeholder="search logs"
+          style={{ padding: '4px 8px', border: '1px solid #ccc', borderRadius: '4px', width: '240px' }}
+        />
+      </div>
+      <div style={{ marginTop: '12px' }}>
+        <LogsPanel
+          id={id}
+          data={logsPanelData}
+          timeRange={timeRange}
+          timeZone={timeZone}
+          fieldConfig={fieldConfig}
+          options={logsPanelOptions}
+          width={panelWidth}
+          height={0}
+          transparent={transparent}
+          title={title}
+          renderCounter={renderCounter}
+          eventBus={eventBus}
+          onOptionsChange={onLogsPanelOptionsChange}
+          onFieldConfigChange={onFieldConfigChange}
+          replaceVariables={replaceVariables}
+          onChangeTimeRange={onChangeTimeRange}
+          expandAll={logsExpandAll}
+          highlightTerm={logHighlightTerm}
+          wrapTags={logTagsWrap}
+        />
+      </div>
     </div>
   );
 };

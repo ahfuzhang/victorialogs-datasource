@@ -69,6 +69,11 @@
       "type": "panel",
       "name": "LogFilter",
       "path": "panels/log-filter"
+    },
+    {
+      "type": "panel",
+      "name": "Logs",
+      "path": "panels/logs"
     }
   ]
 }

@@ -210,6 +210,15 @@ const config = async (env): Promise<Configuration> => {
           { from: 'img/**/*', to: '.', noErrorOnMissing: true },
           { from: 'libs/**/*', to: '.', noErrorOnMissing: true },
           { from: 'static/**/*', to: '.', noErrorOnMissing: true },
+          {
+            from: '**/*',
+            context: path.resolve(process.cwd(), 'panels'),
+            to: 'panels/[path][name][ext]',
+            noErrorOnMissing: true,
+            globOptions: {
+              ignore: ['**/*.ts', '**/*.tsx', '**/*.test.*', '**/*.md', '**/*.cue', '**/*.gen.ts'],
+            },
+          },
           { from: '**/query_help.md', to: '.', noErrorOnMissing: true },
         ],
       }),
@@ -259,6 +268,36 @@ const config = async (env): Promise<Configuration> => {
       extensions: ['.js', '.jsx', '.ts', '.tsx'],
       // handle resolving "rootDir" paths
       modules: [path.resolve(process.cwd(), 'src'), 'node_modules'],
+      alias: {
+        'app/features/explore/utils/links': path.resolve(process.cwd(), 'panels/logs/shims/exploreLinks.ts'),
+        'app/features/logs/components/ControlledLogRows': path.resolve(
+          process.cwd(),
+          'panels/logs/shims/ControlledLogRows.tsx'
+        ),
+        'app/features/logs/components/InfiniteScroll': path.resolve(process.cwd(), 'panels/logs/shims/InfiniteScroll.tsx'),
+        'app/features/logs/components/log-context/LogRowContextModal': path.resolve(
+          process.cwd(),
+          'panels/logs/shims/LogRowContextModal.tsx'
+        ),
+        'app/features/logs/components/panel/LogLineContext': path.resolve(
+          process.cwd(),
+          'panels/logs/shims/LogLineContext.tsx'
+        ),
+        'app/features/logs/components/panel/LogList': path.resolve(process.cwd(), 'panels/logs/shims/LogList.tsx'),
+        'app/features/panel/components/PanelDataErrorView': path.resolve(
+          process.cwd(),
+          'panels/logs/shims/PanelDataErrorView.tsx'
+        ),
+        'app/plugins/datasource/loki/mergeResponses': path.resolve(process.cwd(), 'panels/logs/shims/mergeResponses.ts'),
+        '../../../core/utils/shortLinks': path.resolve(process.cwd(), 'panels/logs/shims/shortLinks.ts'),
+        '../../../features/logs/components/LogLabels': path.resolve(
+          process.cwd(),
+          'panels/logs/shims/LogLabels.tsx'
+        ),
+        '../../../features/logs/components/LogRows': path.resolve(process.cwd(), 'panels/logs/shims/LogRows.tsx'),
+        '../../../features/logs/logsModel': path.resolve(process.cwd(), 'panels/logs/shims/logsModel.ts'),
+        'app/features/panel/suggestions/utils': path.resolve(process.cwd(), 'panels/logs/shims/panelSuggestions.ts'),
+      },
       unsafeCache: true,
     },
   };
