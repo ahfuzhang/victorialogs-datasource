@@ -10,8 +10,24 @@ export const LogRows: React.FC<{
   expandAll?: boolean;
   highlightTerm?: string;
   wrapTags?: boolean;
+  logFontSize?: number;
+  onTagFilter?: (tagName: string, tagValue: string) => void;
+  onTagExclude?: (tagName: string, tagValue: string) => void;
+  onTagHide?: (tagName: string, tagValue: string) => void;
   children?: React.ReactNode;
-}> = ({ logRows, showTime, wrapLogMessage, expandAll, highlightTerm, wrapTags, children }) => {
+}> = ({
+  logRows,
+  showTime,
+  wrapLogMessage,
+  expandAll,
+  highlightTerm,
+  wrapTags,
+  logFontSize,
+  onTagFilter,
+  onTagExclude,
+  onTagHide,
+  children,
+}) => {
   return (
     <div>
       <LogRowList
@@ -21,6 +37,10 @@ export const LogRows: React.FC<{
         expandAll={expandAll}
         highlightTerm={highlightTerm}
         wrapTags={wrapTags}
+        logFontSize={logFontSize}
+        onTagFilter={onTagFilter}
+        onTagExclude={onTagExclude}
+        onTagHide={onTagHide}
       />
       {children}
     </div>

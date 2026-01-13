@@ -105,6 +105,32 @@ const createStringBuilder = (initial = ''): StringBuilder => {
   };
 };
 
+const readCookieValue = (key: string): string | null => {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const parts = document.cookie.split(';').map((part) => part.trim());
+  const encodedKey = encodeURIComponent(key);
+  for (const part of parts) {
+    if (!part) {
+      continue;
+    }
+    const [rawName, ...rest] = part.split('=');
+    if (rawName === encodedKey) {
+      return decodeURIComponent(rest.join('='));
+    }
+  }
+  return null;
+};
+
+const writeCookieValue = (key: string, value: string, days = 30) => {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const maxAge = Math.floor(days * 24 * 60 * 60);
+  document.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}`;
+};
+
 const sysFields: Record<string, null> = {
   _msg: null,
   _stream: null,
@@ -120,6 +146,7 @@ const operatorMap: Record<string, string> = {
 };
 
 const defaultRecordCount = 50;
+const logUiCookieKey = 'victorialogs-logfilter-log-ui';
 
 const nameOfOperatorEqual = "equal";
 
@@ -141,6 +168,11 @@ const stepComboboxOptions: Array<ComboboxOption<string>> = Object.keys(stepInter
   label: value,
   value,
 }));
+
+const logFontSizeOptions: Array<ComboboxOption<number>> = Array.from({ length: 14 }, (_value, idx) => {
+  const size = 11 + idx;
+  return { label: `${size}px`, value: size };
+});
 
 const getIntervalMsFromStep = (raw: unknown): number | undefined => {
   if (typeof raw !== 'string') {
@@ -183,18 +215,18 @@ const decodeLegendLabel = (raw: unknown, fields: string[]): string | undefined =
     }
     const values = fields.length
       ? fields.map((key) => {
-          const value = parsed[key];
-          if (value === '' || value == null) {
-            return 'others';
-          }
-          return String(value);
-        })
+        const value = parsed[key];
+        if (value === '' || value == null) {
+          return 'others';
+        }
+        return String(value);
+      })
       : Object.values(parsed).map((value) => {
-          if (value === '' || value == null) {
-            return 'others';
-          }
-          return String(value);
-        });
+        if (value === '' || value == null) {
+          return 'others';
+        }
+        return String(value);
+      });
     const label = values.join(' ').trim();
     return label.length ? label : 'others';
   } catch {
@@ -476,6 +508,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   const [logSearchInput, setLogSearchInput] = useState<string>('');
   const [logHighlightTerm, setLogHighlightTerm] = useState<string>('');
   const [logTagsWrap, setLogTagsWrap] = useState<boolean>(true);
+  const [logFontSize, setLogFontSize] = useState<number>(12);
+  const [saveLogUiToCookie, setSaveLogUiToCookie] = useState<boolean>(false);
   const timeRangeRef = useRef<TimeRange | undefined>(timeRange);
   const datasourceVarValueRef = useRef<string | null>(null);
   const logsqlVarValueRef = useRef<string>('');
@@ -665,6 +699,35 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
     // Logs panel options are fixed for this custom panel.
   }, []);
 
+  const applyLogTagFilter = (
+    tagName: string,
+    tagValue: string,
+    fieldOperator: Option,
+    streamOperator: string
+  ) => {
+    if (!tagName) {
+      return;
+    }
+    // 当前字段如果属于 stream field，则走 stream 过滤器
+    if (Object.prototype.hasOwnProperty.call(streamFieldMapRef.current, tagName)) {
+      // Stream labels must be filtered via stream filters to avoid empty results.
+      getFieldsByStreamFields(tagName, streamOperator, tagValue);
+      return;
+    }
+    createOrUpdateFieldFilterData(tagName, fieldOperator.value, fieldOperator.label, tagValue);
+  };
+
+  const onLogTagFilter = useCallback((_tagName: string, _tagValue: string) => {
+    applyLogTagFilter(_tagName, _tagValue, defaultFieldOperatorOptions[0], '=');
+  }, []);
+
+  const onLogTagExclude = useCallback((_tagName: string, _tagValue: string) => {
+    applyLogTagFilter(_tagName, _tagValue, defaultFieldOperatorOptions[2], '!=');
+  }, []);
+  const onLogTagHide = useCallback((_tagName: string, _tagValue: string) => {
+    alert(3);
+  }, []);
+
   const onLegendItemClick = useCallback((item: TimeSeriesLegendItem) => {
     setSelectedSeries((prev) => {
       if (prev && prev.frameIndex === item.fieldIndex.frameIndex && prev.fieldIndex === item.fieldIndex.fieldIndex) {
@@ -673,6 +736,43 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       return { ...item.fieldIndex };
     });
   }, []);
+
+  useEffect(() => {
+    const raw = readCookieValue(logUiCookieKey);
+    if (!raw) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as {
+        expandAll?: boolean;
+        wrapTags?: boolean;
+        fontSize?: number;
+      };
+      if (typeof parsed.expandAll === 'boolean') {
+        setLogsExpandAll(parsed.expandAll);
+      }
+      if (typeof parsed.wrapTags === 'boolean') {
+        setLogTagsWrap(parsed.wrapTags);
+      }
+      if (typeof parsed.fontSize === 'number' && Number.isFinite(parsed.fontSize)) {
+        setLogFontSize(parsed.fontSize);
+      }
+    } catch (err) {
+      console.error('read log ui cookie failed', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!saveLogUiToCookie) {
+      return;
+    }
+    const payload = JSON.stringify({
+      expandAll: logsExpandAll,
+      wrapTags: logTagsWrap,
+      fontSize: logFontSize,
+    });
+    writeCookieValue(logUiCookieKey, payload, 180);
+  }, [logFontSize, logTagsWrap, logsExpandAll, saveLogUiToCookie]);
 
   const onQueryZoom = useCallback(
     (range: { from: number; to: number }) => {
@@ -697,6 +797,15 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
     }
     return 1000;
   }, [limitEnabled, limitValue]);
+  const logsCount = useMemo(() => {
+    return logsFrames.reduce((sum, frame) => {
+      const length =
+        typeof frame.length === 'number'
+          ? frame.length
+          : frame.fields.reduce((max, field) => Math.max(max, field.values.length), 0);
+      return sum + (Number.isFinite(length) ? length : 0);
+    }, 0);
+  }, [logsFrames]);
 
   const logsPanelData = useMemo<PanelData>(() => {
     const target = {
@@ -712,21 +821,21 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
     const app = baseRequest?.app ?? CoreApp.Dashboard;
     const request: DataQueryRequest = baseRequest
       ? {
-          ...baseRequest,
-          app,
-          targets: [target],
-        }
+        ...baseRequest,
+        app,
+        targets: [target],
+      }
       : {
-          app,
-          requestId: 'log-filter-logs',
-          interval,
-          intervalMs,
-          range: timeRange,
-          scopedVars: data.request?.scopedVars ?? {},
-          targets: [target],
-          timezone: timeZone,
-          startTime: Date.now(),
-        };
+        app,
+        requestId: 'log-filter-logs',
+        interval,
+        intervalMs,
+        range: timeRange,
+        scopedVars: data.request?.scopedVars ?? {},
+        targets: [target],
+        timezone: timeZone,
+        startTime: Date.now(),
+      };
     return {
       ...data,
       series: logsFrames,
@@ -1205,10 +1314,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    showJSLog('useEffect: [limitEnabled, limitValue]', 'green');
-    generateLogsQL(true);
-  }, [limitEnabled, limitValue]);
+  // useEffect(() => {
+  //   showJSLog('useEffect: [limitEnabled, limitValue]', 'green');
+  //   generateLogsQL(true);
+  // }, [limitEnabled, limitValue]);
   useEffect(() => {
     showJSLog('useEffect: [options?.jsonConfig]', 'green');
     setJsonConfig(options?.jsonConfig ?? '');
@@ -1381,6 +1490,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
     return sb;
   }
 
+  const defaultLimitValue = 100;
+
   // 根据几个全局的 map, 生成 logsQL 语句
   const generateLogsQL = (force: boolean) => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
@@ -1523,11 +1634,14 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
     }
     // limit 配置
     if (limitEnabled) {
-      const num = Number(limitValue);
-      const safeLimit = Number.isFinite(num) && num > 0 ? num : 10;
+      var textbox = document.getElementById('textboxForLimit') as HTMLInputElement | null;
+      let limitValue1 = textbox?.value ?? limitValue;
+      const num = Number(limitValue1);
+      const safeLimit = Number.isFinite(num) && num > 0 ? num : defaultLimitValue;
       sb.append('| limit ');
       sb.append(String(safeLimit));
       sb.append(' ');
+      //showJSLog('append limit:' + safeLimit.toString() + ', limitValue=' + limitValue, 'blue');
     }
     logsql.value = sb.toString();
     //showJSLog('generate logsql:' + logsql.value + ' ' + hasLogsqlAtUrl.toString(), 'orange');
@@ -1819,6 +1933,21 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
         setTestResult(err?.statusText ?? '');
         setTestError(err?.data?.results?.A?.error ?? '');
       });
+  };
+
+  const onLogsqlReset = () => {
+    const params: Record<string, string | null> = { 'var-step': null };
+    let varKey = `var-${logsqlVariable}`;
+    if (logsqlVariable.startsWith('$')) {
+      varKey = `var-` + logsqlVariable.substring(1);
+    }
+    params[varKey] = null;
+    try {
+      locationService.partial(params, true);
+    } catch (err) {
+      console.error('reset url variables failed', err);
+    }
+    window.location.reload();
   };
 
   // 当输入正则表达式变化时
@@ -2793,9 +2922,16 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                         />
                         <span>limit:</span>
                         <input
+                          id="textboxForLimit"
                           type="number"
                           value={limitValue}
-                          onChange={(e) => setLimitValue(e.currentTarget.value)}
+                          onChange={(e) => {
+                            const sanitized = e.currentTarget.value.replace(/\D+/g, '');
+                            setLimitValue(sanitized);
+                          }}
+                          onBlur={() => {
+                            generateLogsQL(true);
+                          }}
                           style={{ width: '80px' }}
                         />
                       </div>
@@ -2884,6 +3020,9 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                   id="logsql"
                 />
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: '12px' }}>
+                  <button type="button" style={{ padding: '8px 8px', marginLeft: '12px' }} onClick={onLogsqlReset}>
+                    Reset
+                  </button>&nbsp;&nbsp;
                   <button style={{ padding: '8px 8px' }} onClick={onLogsqlCopy}>
                     Copy LogSQL
                   </button>
@@ -3249,39 +3388,69 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
         </div>
       </div>
       <hr />
-      <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span>show/hide</span>
-        <Switch
-          value={logsExpandAll}
-          onChange={(event) => {
-            setLogsExpandAll(event.currentTarget.checked);
-          }}
-        />
-        <span>word wrap</span>
-        <Switch
-          value={logTagsWrap}
-          onChange={(event) => {
-            setLogTagsWrap(event.currentTarget.checked);
-          }}
-        />
-        <input
-          type="text"
-          value={logSearchInput}
-          onChange={(event) => setLogSearchInput(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              const term = logSearchInput.trim();
-              setLogHighlightTerm(term);
-            }
-          }}
-          onBlur={() => {
-            const term = logSearchInput.trim();
-            setLogHighlightTerm(term);
-          }}
-          placeholder="search logs"
-          style={{ padding: '4px 8px', border: '1px solid #ccc', borderRadius: '4px', width: '240px' }}
-        />
-      </div>
+      <table width="100%" style={{ borderCollapse: 'collapse' }} border={0}>
+        <tr>
+          <td align="left">
+            <input
+              type="text"
+              value={logSearchInput}
+              onChange={(event) => setLogSearchInput(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  const term = logSearchInput.trim();
+                  setLogHighlightTerm(term);
+                }
+              }}
+              onBlur={() => {
+                const term = logSearchInput.trim();
+                setLogHighlightTerm(term);
+              }}
+              placeholder="search logs"
+              style={{ padding: '4px 8px', border: '1px solid #ccc', borderRadius: '4px', width: '240px' }}
+            />
+            <span style={{ marginLeft: '12px', color: theme.colors.text.secondary, fontSize: '12px' }}>
+              {logsCount} logs
+            </span>
+          </td>
+          <td align="right" valign="top">
+            <div style={{ marginTop: '12px', display: 'flex', alignItems: 'right', gap: '8px', textAlign: 'right', width: '700px' }}>
+              <span>fold/expand</span>
+              <Switch
+                value={logsExpandAll}
+                onChange={(event) => {
+                  setLogsExpandAll(event.currentTarget.checked);
+                }}
+              />
+              <span>word wrap</span>
+              <Switch
+                value={logTagsWrap}
+                onChange={(event) => {
+                  setLogTagsWrap(event.currentTarget.checked);
+                }}
+              />
+
+              <span>font size</span>
+              <Combobox
+                width={10}
+                options={logFontSizeOptions}
+                value={logFontSize}
+                createCustomValue={false}
+                onChange={(option) => {
+                  setLogFontSize(option?.value ?? 12);
+                }}
+              />
+              <span>Save To Cookie</span>
+              <Switch
+                value={saveLogUiToCookie}
+                onChange={(event) => {
+                  setSaveLogUiToCookie(event.currentTarget.checked);
+                }}
+              />
+            </div>
+          </td>
+        </tr>
+      </table>
+
       <div style={{ marginTop: '12px' }}>
         <LogsPanel
           id={id}
@@ -3303,6 +3472,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
           expandAll={logsExpandAll}
           highlightTerm={logHighlightTerm}
           wrapTags={logTagsWrap}
+          logFontSize={logFontSize}
+          onTagFilter={onLogTagFilter}
+          onTagExclude={onLogTagExclude}
+          onTagHide={onLogTagHide}
         />
       </div>
     </div>

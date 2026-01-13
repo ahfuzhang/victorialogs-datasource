@@ -9,6 +9,10 @@ type Props = {
   expandAll?: boolean;
   highlightTerm?: string;
   wrapTags?: boolean;
+  logFontSize?: number;
+  onTagFilter?: (tagName: string, tagValue: string) => void;
+  onTagExclude?: (tagName: string, tagValue: string) => void;
+  onTagHide?: (tagName: string, tagValue: string) => void;
 };
 
 const buildHighlightParts = (text: string, term: string) => {
@@ -51,8 +55,14 @@ export const LogRowList: React.FC<Props> = ({
   expandAll = false,
   highlightTerm = '',
   wrapTags = true,
+  logFontSize,
+  onTagFilter,
+  onTagExclude,
+  onTagHide,
 }) => {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const messageFontSize = logFontSize ?? 12;
+  const tagFontSize = logFontSize ?? 12;
   const iconButtonStyle: React.CSSProperties = {
     background: 'none',
     border: 'none',
@@ -126,7 +136,7 @@ export const LogRowList: React.FC<Props> = ({
               {showTime && (
                 <span
                   style={{
-                    fontSize: '12px',
+                    fontSize: `${messageFontSize}px`,
                     color: 'rgba(255, 255, 255, 0.75)',
                     whiteSpace: 'nowrap',
                   }}
@@ -146,7 +156,7 @@ export const LogRowList: React.FC<Props> = ({
                 }}
                 style={{
                   fontFamily: 'monospace',
-                  fontSize: '12px',
+                  fontSize: `${messageFontSize}px`,
                   whiteSpace: wrapLogMessage ? 'pre-wrap' : 'pre',
                   wordBreak: 'break-word',
                   cursor: 'pointer',
@@ -170,7 +180,7 @@ export const LogRowList: React.FC<Props> = ({
                   <div
                     key={key}
                     style={{
-                      fontSize: '11px',
+                      fontSize: `${tagFontSize}px`,
                       color: 'rgba(255, 255, 255, 0.75)',
                       lineHeight: 1,
                       whiteSpace: wrapTags ? 'normal' : 'nowrap',
@@ -193,6 +203,7 @@ export const LogRowList: React.FC<Props> = ({
                           style={iconButtonStyle}
                           onMouseEnter={onIconEnter}
                           onMouseLeave={onIconLeave}
+                          onClick={() => onTagFilter?.(key, value)}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="#fff">
                             <path d="M15,10H12V7a1,1,0,0,0-2,0v3H7a1,1,0,0,0,0,2h3v3a1,1,0,0,0,2,0V12h3a1,1,0,0,0,0-2Zm6.71,10.29L18,16.61A9,9,0,1,0,16.61,18l3.68,3.68a1,1,0,0,0,1.42,0A1,1,0,0,0,21.71,20.29ZM11,18a7,7,0,1,1,7-7A7,7,0,0,1,11,18Z"></path>
@@ -206,6 +217,7 @@ export const LogRowList: React.FC<Props> = ({
                           style={iconButtonStyle}
                           onMouseEnter={onIconEnter}
                           onMouseLeave={onIconLeave}
+                          onClick={() => onTagExclude?.(key, value)}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="#fff">
                             <path d="M21.71,20.29,18,16.61A9,9,0,1,0,16.61,18l3.68,3.68a1,1,0,0,0,1.42,0A1,1,0,0,0,21.71,20.29ZM11,18a7,7,0,1,1,7-7A7,7,0,0,1,11,18Zm4-8H7a1,1,0,0,0,0,2h8a1,1,0,0,0,0-2Z"></path>
@@ -219,6 +231,7 @@ export const LogRowList: React.FC<Props> = ({
                           style={iconButtonStyle}
                           onMouseEnter={onIconEnter}
                           onMouseLeave={onIconLeave}
+                          onClick={() => onTagHide?.(key, value)}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="#fff">
                             <path d="M21.92,11.6C19.9,6.91,16.1,4,12,4S4.1,6.91,2.08,11.6a1,1,0,0,0,0,.8C4.1,17.09,7.9,20,12,20s7.9-2.91,9.92-7.6A1,1,0,0,0,21.92,11.6ZM12,18c-3.17,0-6.17-2.29-7.9-6C5.83,8.29,8.83,6,12,6s6.17,2.29,7.9,6C18.17,15.71,15.17,18,12,18ZM12,8a4,4,0,1,0,4,4A4,4,0,0,0,12,8Zm0,6a2,2,0,1,1,2-2A2,2,0,0,1,12,14Z"></path>

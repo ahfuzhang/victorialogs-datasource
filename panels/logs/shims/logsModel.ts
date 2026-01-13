@@ -13,11 +13,18 @@ export type SimpleLogRow = {
 const timeFieldNames = ['_time', 'time', 'timestamp', 'ts'];
 const messageFieldNames = ['_msg', 'message', 'msg', 'log', 'line'];
 
-const findFieldByName = (frame: DataFrame, names: string[]) =>
-  frame.fields.find((field) => names.includes(field.name));
+const findFieldByName = (frame: DataFrame, names: string[]) => {
+  for (const name of names) {
+    const field = frame.fields.find((item) => item.name === name);
+    if (field) {
+      return field;
+    }
+  }
+  return undefined;
+};
 
 const getTimeField = (frame: DataFrame): Field | undefined =>
-  frame.fields.find((field) => field.type === FieldType.time) ?? findFieldByName(frame, timeFieldNames);
+  findFieldByName(frame, timeFieldNames) ?? frame.fields.find((field) => field.type === FieldType.time);
 
 const getMessageField = (frame: DataFrame): Field | undefined =>
   findFieldByName(frame, messageFieldNames) ??

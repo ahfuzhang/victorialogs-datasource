@@ -10,8 +10,24 @@ export const LogList: React.FC<{
   expandAll?: boolean;
   highlightTerm?: string;
   wrapTags?: boolean;
+  logFontSize?: number;
+  onTagFilter?: (tagName: string, tagValue: string) => void;
+  onTagExclude?: (tagName: string, tagValue: string) => void;
+  onTagHide?: (tagName: string, tagValue: string) => void;
   children?: React.ReactNode;
-}> = ({ children, logs, showTime, wrapLogMessage, expandAll, highlightTerm, wrapTags }) => {
+}> = ({
+  children,
+  logs,
+  showTime,
+  wrapLogMessage,
+  expandAll,
+  highlightTerm,
+  wrapTags,
+  logFontSize,
+  onTagFilter,
+  onTagExclude,
+  onTagHide,
+}) => {
   if (!logs || logs.length === 0) {
     return null;
   }
@@ -24,6 +40,10 @@ export const LogList: React.FC<{
         expandAll={expandAll}
         highlightTerm={highlightTerm}
         wrapTags={wrapTags}
+        logFontSize={logFontSize}
+        onTagFilter={onTagFilter}
+        onTagExclude={onTagExclude}
+        onTagHide={onTagHide}
       />
       {children}
     </div>

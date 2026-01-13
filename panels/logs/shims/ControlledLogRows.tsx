@@ -10,11 +10,18 @@ type Props = {
   expandAll?: boolean;
   highlightTerm?: string;
   wrapTags?: boolean;
+  logFontSize?: number;
+  onTagFilter?: (tagName: string, tagValue: string) => void;
+  onTagExclude?: (tagName: string, tagValue: string) => void;
+  onTagHide?: (tagName: string, tagValue: string) => void;
   children?: React.ReactNode;
 };
 
 export const ControlledLogRows = React.forwardRef<HTMLDivElement, Props>(
-  ({ logRows, showTime, wrapLogMessage, expandAll, highlightTerm, wrapTags, children }, ref) => {
+  (
+    { logRows, showTime, wrapLogMessage, expandAll, highlightTerm, wrapTags, logFontSize, onTagFilter, onTagExclude, onTagHide, children },
+    ref
+  ) => {
     return (
       <div ref={ref as React.RefObject<HTMLDivElement>}>
         <LogRowList
@@ -24,6 +31,10 @@ export const ControlledLogRows = React.forwardRef<HTMLDivElement, Props>(
           expandAll={expandAll}
           highlightTerm={highlightTerm}
           wrapTags={wrapTags}
+          logFontSize={logFontSize}
+          onTagFilter={onTagFilter}
+          onTagExclude={onTagExclude}
+          onTagHide={onTagHide}
         />
         {children}
       </div>

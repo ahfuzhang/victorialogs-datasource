@@ -71,6 +71,10 @@ interface LogsPanelProps extends PanelProps<Options> {
   expandAll?: boolean;
   highlightTerm?: string;
   wrapTags?: boolean;
+  logFontSize?: number;
+  onTagFilter?: (tagName: string, tagValue: string) => void;
+  onTagExclude?: (tagName: string, tagValue: string) => void;
+  onTagHide?: (tagName: string, tagValue: string) => void;
   /**
    * Adds a key => value filter to the query referenced by the provided DataFrame refId. Used by Log details and Logs table.
    * onClickFilterLabel?: (key: string, value: string, frame?: DataFrame) => void;
@@ -187,6 +191,10 @@ export const LogsPanel = ({
   expandAll,
   highlightTerm,
   wrapTags,
+  logFontSize,
+  onTagFilter,
+  onTagExclude,
+  onTagHide,
 }: LogsPanelProps) => {
   const isAscending = sortOrder === LogsSortOrder.Ascending;
   const style = useStyles2(getStyles);
@@ -640,6 +648,10 @@ export const LogsPanel = ({
               expandAll={expandAll}
               highlightTerm={highlightTerm}
               wrapTags={wrapTags}
+              logFontSize={logFontSize}
+              onTagFilter={onTagFilter}
+              onTagExclude={onTagExclude}
+              onTagHide={onTagHide}
             />
           )}
         </div>
@@ -672,6 +684,10 @@ export const LogsPanel = ({
                 wrapLogMessage={wrapLogMessage}
                 highlightTerm={highlightTerm}
                 wrapTags={wrapTags}
+                logFontSize={logFontSize}
+                onTagFilter={onTagFilter}
+                onTagExclude={onTagExclude}
+                onTagHide={onTagHide}
                 showContextToggle={showContextToggle}
                 deduplicatedRows={deduplicatedRows}
                 dedupStrategy={dedupStrategy}
@@ -729,6 +745,10 @@ export const LogsPanel = ({
             wrapLogMessage={wrapLogMessage}
             highlightTerm={highlightTerm}
             wrapTags={wrapTags}
+            logFontSize={logFontSize}
+            onTagFilter={onTagFilter}
+            onTagExclude={onTagExclude}
+            onTagHide={onTagHide}
             deduplicatedRows={deduplicatedRows}
             dedupStrategy={dedupStrategy}
             onClickFilterLabel={
