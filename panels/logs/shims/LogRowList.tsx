@@ -48,6 +48,35 @@ const buildHighlightParts = (text: string, term: string) => {
   return parts;
 };
 
+const getLogLevelColor = (labels: Record<string, string>): string | undefined => {
+  const entry = Object.entries(labels).find(([key]) => {
+    const normalizedKey = key.toLowerCase();
+    return normalizedKey === 'level' || normalizedKey === 'loglevel';
+  });
+  if (!entry) {
+    return undefined;
+  }
+  const rawValue = entry[1];
+  const normalizedValue = rawValue.trim().toLowerCase();
+  if (!normalizedValue) {
+    return undefined;
+  }
+  const token = normalizedValue.split(/[^a-z0-9]+/)[0] || normalizedValue;
+  if (token === 'panic' || token === 'fatal') {
+    return '#b277ff';
+  }
+  if (token === 'error' || token === 'err') {
+    return '#ff6b6b';
+  }
+  if (token === 'warning' || token === 'warn' || token === 'wrn' || token === 'wanring') {
+    return '#f2c94c';
+  }
+  if (token === 'info' || token === 'information') {
+    return '#6fcf97';
+  }
+  return undefined;
+};
+
 export const LogRowList: React.FC<Props> = ({
   rows,
   showTime = true,
@@ -125,6 +154,7 @@ export const LogRowList: React.FC<Props> = ({
         const isExpanded = expandAll ? override !== false : override === true;
         const labels = Object.entries(row.labels);
         const maxTagLength = labels.reduce((max, [key]) => Math.max(max, key.length), 0);
+        const timeColor = getLogLevelColor(row.labels);
         return (
           <div
             key={row.id}
@@ -137,7 +167,7 @@ export const LogRowList: React.FC<Props> = ({
                 <span
                   style={{
                     fontSize: `${messageFontSize}px`,
-                    color: 'rgba(255, 255, 255, 0.75)',
+                    color: timeColor ?? 'rgba(255, 255, 255, 0.75)',
                     whiteSpace: 'nowrap',
                   }}
                 >

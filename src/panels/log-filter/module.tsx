@@ -2919,6 +2919,13 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   }
 
   const showJSLog = (s: string, color: string) => {
+    const div = document.getElementById('jslog') as HTMLDivElement || null;
+    if (!div) {
+      return;
+    }
+    if (div.style.display === 'none') {
+      return;
+    }
     const now = new Date();
     const formattedTime =
       String(now.getMinutes()).padStart(2, '0') +
@@ -2926,10 +2933,6 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       String(now.getSeconds()).padStart(2, '0') +
       '.' +
       String(now.getMilliseconds()).padStart(3, '0');
-    const div = document.getElementById('jslog') as HTMLDivElement || null;
-    if (!div) {
-      return;
-    }
     const newNode = document.createElement("DIV");
     newNode.innerText = formattedTime + ' ' + s;
     if (color.length > 0) {
@@ -3351,7 +3354,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                 </div>
                 <div id="testResult">{testResult}</div>
                 <div style={{ color: 'red' }}>{testError}</div>
-                <div id="jslog" style={{ border: 0, height: '200px', maxHeight: '200px', overflow: 'scroll', display: 'block' }}></div>
+                <div id="jslog" style={{ border: 0, height: '200px', maxHeight: '200px', overflow: 'scroll', display: 'none' }}></div>
               </div>
             </td>
           </tr>
