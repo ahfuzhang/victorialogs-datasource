@@ -29,11 +29,11 @@ import { getBackendSrv, locationService } from '@grafana/runtime';
 import { LogsPanel } from '../../../panels/logs/LogsPanel';
 import type { Options as LogsPanelOptions } from '../../../panels/logs/panelcfg.gen';
 
-
 interface LogFilterOptions {
   showLogsqlTextarea?: boolean;
   streamFieldList?: string;
   logsqlVariable?: string;
+  hitsGroupFieldList?: string;
   jsonConfig?: string;
 }
 
@@ -198,7 +198,13 @@ const getIntervalMsFromStep = (raw: unknown): number | undefined => {
   return undefined;
 };
 
-const timeSeriesQueryFields = ['status_code'];
+const defaultTimeSeriesFieldsInput = 'level';
+
+const parseFieldsList = (raw: string): string[] =>
+  raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 
 const decodeLegendLabel = (raw: unknown, fields: string[]): string | undefined => {
   if (typeof raw !== 'string') {
@@ -477,6 +483,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   const theme = useTheme2();
   const showLogsqlTextarea = options?.showLogsqlTextarea ?? true;
   const logsqlVariable = options?.logsqlVariable ?? '\$logsql';
+  const configuredHitsGroupFields = (options?.hitsGroupFieldList ?? '').trim() || defaultTimeSeriesFieldsInput;
   const panelWidth = width ?? 0;
   const timeSeriesHeight = 180;
   const pieChartWidth = panelWidth > 0 ? Math.max(240, Math.floor(panelWidth * 0.3)) : 240;
@@ -495,6 +502,11 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   const [messageValue, setMessageValue] = useState<string>('');
   const [limitEnabled, setLimitEnabled] = useState<boolean>(true);
   const [limitValue, setLimitValue] = useState<string>('100');
+  const [useGlobalSort, setUseGlobalSort] = useState<boolean>(false);
+  const [globalSortField, setGlobalSortField] = useState<string>('_time');
+  const [globalSortDesc, setGlobalSortDesc] = useState<boolean>(true);
+  const [removeFieldsEnabled, setRemoveFieldsEnabled] = useState<boolean>(false);
+  const [removeFieldsText, setRemoveFieldsText] = useState<string>('');
   const [cascadeFiltering, setCascadeFiltering] = useState<boolean>(true);
   const [jsonConfig, setJsonConfig] = useState<string>(options?.jsonConfig ?? '');
   const [outputAllFields, setOutputAllFields] = useState<boolean>(true);
@@ -505,6 +517,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   const [filterByStreamFields, setFilterByStreamFields] = useState<boolean>(true);
   const [logsqlValue, setLogsqlValue] = useState<string>('');
   const [logsExpandAll, setLogsExpandAll] = useState<boolean>(false);
+  const [showLogsJson, setShowLogsJson] = useState<boolean>(false);
+  const [timeSeriesFieldsApplied, setTimeSeriesFieldsApplied] = useState<string>(configuredHitsGroupFields);
   const [logSearchInput, setLogSearchInput] = useState<string>('');
   const [logHighlightTerm, setLogHighlightTerm] = useState<string>('');
   const [logTagsWrap, setLogTagsWrap] = useState<boolean>(true);
@@ -724,9 +738,25 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   const onLogTagExclude = useCallback((_tagName: string, _tagValue: string) => {
     applyLogTagFilter(_tagName, _tagValue, defaultFieldOperatorOptions[2], '!=');
   }, []);
-  const onLogTagHide = useCallback((_tagName: string, _tagValue: string) => {
-    alert(3);
-  }, []);
+
+  // 日志行上，点击了隐藏某个字段的按钮
+  const onLogTagHide = (_tagName: string, _tagValue: string) => {
+    const tagName = _tagName.trim();
+    if (!tagName) {
+      return;
+    }
+    setRemoveFieldsEnabled(true);
+    setRemoveFieldsText((prev) => {
+      const fields = parseRemoveFieldsText(prev);
+      if (!fields.includes(tagName)) {
+        fields.push(tagName);
+      }
+      const mode = prev.includes('\n') ? 'multi' : 'single';
+      const nextText = formatRemoveFieldsText(fields, mode);
+      generateLogsQL(true, { enabled: true, text: nextText });
+      return nextText;
+    });
+  };
 
   const onLegendItemClick = useCallback((item: TimeSeriesLegendItem) => {
     setSelectedSeries((prev) => {
@@ -761,6 +791,10 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       console.error('read log ui cookie failed', err);
     }
   }, []);
+
+  useEffect(() => {
+    setTimeSeriesFieldsApplied(configuredHitsGroupFields);
+  }, [configuredHitsGroupFields]);
 
   useEffect(() => {
     if (!saveLogUiToCookie) {
@@ -806,6 +840,140 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       return sum + (Number.isFinite(length) ? length : 0);
     }, 0);
   }, [logsFrames]);
+  const timeSeriesQueryFields = useMemo(() => {
+    const parsed = parseFieldsList(timeSeriesFieldsApplied);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+    return parseFieldsList(configuredHitsGroupFields);
+  }, [configuredHitsGroupFields, timeSeriesFieldsApplied]);
+  const logsJsonText = useMemo(() => {
+    if (!showLogsJson) {
+      return '';
+    }
+    const formatLogJsonTime = (raw: unknown): string | null => {
+      if (raw == null) {
+        return null;
+      }
+      if (raw instanceof Date) {
+        return Number.isNaN(raw.getTime()) ? null : raw.toISOString();
+      }
+      if (typeof raw === 'number') {
+        if (!Number.isFinite(raw)) {
+          return null;
+        }
+        const abs = Math.abs(raw);
+        let ms = raw;
+        if (abs < 1e11) {
+          ms = raw * 1000;
+        } else if (abs > 1e14) {
+          ms = Math.floor(raw / 1e6);
+        }
+        const date = new Date(ms);
+        return Number.isNaN(date.getTime()) ? null : date.toISOString();
+      }
+      const parsed = Date.parse(String(raw));
+      if (Number.isFinite(parsed)) {
+        return new Date(parsed).toISOString();
+      }
+      return String(raw);
+    };
+    const mergeLabels = (row: Record<string, unknown>, rawValue: unknown) => {
+      if (!rawValue) {
+        return;
+      }
+      if (Array.isArray(rawValue)) {
+        rawValue.forEach((item) => {
+          if (typeof item !== 'string') {
+            return;
+          }
+          const idx = item.indexOf(':');
+          if (idx === -1) {
+            const key = item.trim();
+            if (key) {
+              row[key] = '';
+            }
+            return;
+          }
+          const key = item.slice(0, idx).trim();
+          const value = item.slice(idx + 1).trim().replace(/^"|"$/g, '');
+          if (key) {
+            row[key] = value;
+          }
+        });
+        return;
+      }
+      if (typeof rawValue === 'object') {
+        Object.entries(rawValue as Record<string, unknown>).forEach(([key, value]) => {
+          if (key) {
+            row[key] = value ?? '';
+          }
+        });
+      }
+    };
+    const rows: Array<Record<string, unknown>> = [];
+    logsFrames.forEach((frame) => {
+      const length =
+        typeof frame.length === 'number'
+          ? frame.length
+          : frame.fields.reduce((max, field) => Math.max(max, field.values.length), 0);
+      for (let rowIndex = 0; rowIndex < length; rowIndex++) {
+        const row: Record<string, unknown> = {};
+        frame.fields.forEach((field) => {
+          const values: any = field.values as any;
+          const value =
+            values && typeof values.get === 'function' ? values.get(rowIndex) : values?.[rowIndex];
+          const fieldName = field.name === 'Time' ? '_time' : field.name === 'Line' ? '_msg' : field.name;
+          if (fieldName === 'labels') {
+            mergeLabels(row, value);
+            return;
+          }
+          if (fieldName === '_time') {
+            row['_time'] = formatLogJsonTime(value);
+            return;
+          }
+          if (fieldName === '_msg') {
+            row['_msg'] = value ?? null;
+            return;
+          }
+          row[fieldName] = value ?? null;
+        });
+        rows.push(row);
+      }
+    });
+    return rows.map((row) => JSON.stringify(row)).join('\n');
+  }, [logsFrames, showLogsJson]);
+
+  const parseRemoveFieldsText = (raw: string): string[] => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return [];
+    }
+    let text = trimmed;
+    // if (text.startsWith('|')) {
+    //   text = text.slice(1).trim();
+    // }
+    // if (text.toLowerCase().startsWith('delete')) {
+    //   text = text.slice('delete'.length).trim();
+    // }
+    const fields: string[] = [];
+    text.split('\n').forEach((line) => {
+      line
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .forEach((part) => fields.push(part));
+    });
+    return fields;
+  };
+
+  const formatRemoveFieldsText = (fields: string[], mode: 'single' | 'multi'): string => {
+    if (fields.length === 0) {
+      return '';
+    }
+    const separator = mode === 'single' ? ', ' : ',\n';
+    return fields.join(separator);
+  };
 
   const logsPanelData = useMemo<PanelData>(() => {
     const target = {
@@ -972,13 +1140,16 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   );
 
   // 通过 tips 查询，填充 Time Series 数据
-  const loadTimeSeriesData = useCallback(async (stepOverride?: string): Promise<DataFrame[]> => {
+  const loadTimeSeriesData = useCallback(
+    async (stepOverride?: string, fieldsOverride?: string[]): Promise<DataFrame[]> => {
     const startTs = timeRangeRef.current?.from?.valueOf();
     const endTs = timeRangeRef.current?.to?.valueOf();
     const logsqlEl = document.getElementById('logsql') as HTMLTextAreaElement | null;
     const logsql = logsqlEl?.value ?? '';
     const dsUid = await resolveDatasourceUid();
     const dsId = await resolveDatasourceId(dsUid);
+    const fieldsForQuery =
+      fieldsOverride && fieldsOverride.length > 0 ? fieldsOverride : timeSeriesQueryFields;
     let intervalMsFromStep: number | undefined;
     try {
       const stepFromUrl = locationService.getSearch().get('var-step');
@@ -1003,7 +1174,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
           datasourceId: dsId ?? 0,
           editorMode: 'code',
           expr: logsql,
-          fields: timeSeriesQueryFields,
+          fields: fieldsForQuery,
           legendFormat: '',
           queryType: 'hits',
           refId: 'A',
@@ -1029,7 +1200,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
         const parsed = frames.map((f: any) => toDataFrame(f)); // 将返回数据转为 DataFrame
         let seriesIndex = 0;
         const configured = parsed.map((frame) => {
-          const decodedFrameName = decodeLegendLabel(frame.name, timeSeriesQueryFields);
+          const decodedFrameName = decodeLegendLabel(frame.name, fieldsForQuery);
           const cfgFields = frame.fields.map((fld: any) => {
             const mergedCustom = {
               ...(logVolumeFieldConfig.custom ?? {}),
@@ -1041,7 +1212,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
               stacking: logVolumeFieldConfig.custom?.stacking,
               scaleDistribution: logVolumeFieldConfig.custom?.scaleDistribution,
             }; // 合并并覆盖关键配置
-            const decodedDisplayName = decodeLegendLabel(fld?.config?.displayNameFromDS, timeSeriesQueryFields);
+            const decodedDisplayName = decodeLegendLabel(fld?.config?.displayNameFromDS, fieldsForQuery);
             const nextField = {
               ...fld, // 保留原字段
               config: {
@@ -1088,7 +1259,7 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       setTestError(err?.statusText ?? 'Failed to load time series data'); // 展示错误信息
       return []; // 返回空数组
     }
-  }, [data, resolveDatasourceUid, resolveDatasourceId, stepValue, theme, timeZone]);
+  }, [data, resolveDatasourceUid, resolveDatasourceId, stepValue, theme, timeSeriesQueryFields, timeZone]);
 
   const loadLogsData = useCallback(
     async (logsqlOverride?: string): Promise<DataFrame[]> => {
@@ -1148,6 +1319,16 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       }
     },
     [logsMaxLines, logsqlVariable, resolveDatasourceId, resolveDatasourceUid]
+  );
+
+  const applyTimeSeriesFieldsInput = useCallback(
+    (rawValue: string) => {
+      const nextValue = rawValue ?? '';
+      const fields = parseFieldsList(nextValue);
+      const resolvedValue = fields.length > 0 ? nextValue : configuredHitsGroupFields;
+      setTimeSeriesFieldsApplied(resolvedValue);
+    },
+    [configuredHitsGroupFields]
   );
 
   // 步长变化时的处理
@@ -1493,7 +1674,11 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
   const defaultLimitValue = 100;
 
   // 根据几个全局的 map, 生成 logsQL 语句
-  const generateLogsQL = (force: boolean) => {
+  const generateLogsQL = (
+    force: boolean,
+    removeFieldsOverride?: { enabled?: boolean; text?: string },
+    globalSortOverride?: { enabled?: boolean; field?: string; desc?: boolean }
+  ) => {
     const logsql = document.getElementById('logsql') as HTMLTextAreaElement | null;
     if (!logsql) {
       return;
@@ -1631,6 +1816,31 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
       sb.append('| fields ')
       sb.append(tidyOutputFields(txtFieldsList.value).join(', '));
       sb.append(' ')
+    }
+    const removeEnabled = removeFieldsOverride?.enabled ?? removeFieldsEnabled;
+    const removeText = removeFieldsOverride?.text ?? removeFieldsText;
+    if (removeEnabled) {
+      const fields = parseRemoveFieldsText(removeText);
+      if (fields.length > 0) {
+        sb.append('| delete ');
+        sb.append(fields.join(', '));
+        sb.append(' ');
+      }
+    }
+    const sortEnabled = globalSortOverride?.enabled ?? useGlobalSort;
+    const sortField = globalSortOverride?.field ?? globalSortField;
+    const sortDesc = globalSortOverride?.desc ?? globalSortDesc;
+    if (sortEnabled) {
+      const field = sortField.trim();
+      if (field.length > 0) {
+        sb.append('| sort by (');
+        sb.append(field);
+        sb.append(')');
+        if (sortDesc) {
+          sb.append(' desc');
+        }
+        sb.append(' ');
+      }
     }
     // limit 配置
     if (limitEnabled) {
@@ -2909,30 +3119,55 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                       </div>
                     </td>
                   </tr>
+
                   <tr>
-                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>output options</td>
-                    <td style={{ padding: '4px 0' }}>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                        <input
-                          type="checkbox"
-                          checked={limitEnabled}
-                          onChange={(e) => {
-                            setLimitEnabled(e.currentTarget.checked);
+                    <td>Global sort option:</td>
+                    <td>
+                      <div style={{ marginTop: '6px', display: 'inline-flex', gap: '12px', alignItems: 'center' }}>
+                        <span>use global sort: </span>
+                        <Switch
+                          value={useGlobalSort}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            const next = e.currentTarget.checked;
+                            setUseGlobalSort(next);
+                            generateLogsQL(true, undefined, {
+                              enabled: next,
+                              field: globalSortField,
+                              desc: globalSortDesc,
+                            });
                           }}
                         />
-                        <span>limit:</span>
+                        
+                        <span>field name:</span>
                         <input
-                          id="textboxForLimit"
-                          type="number"
-                          value={limitValue}
-                          onChange={(e) => {
-                            const sanitized = e.currentTarget.value.replace(/\D+/g, '');
-                            setLimitValue(sanitized);
-                          }}
+                          type="text"
+                          value={globalSortField}
+                          disabled={!useGlobalSort}
+                          onChange={(e) => setGlobalSortField(e.currentTarget.value)}
                           onBlur={() => {
-                            generateLogsQL(true);
+                            if (useGlobalSort) {
+                              generateLogsQL(true, undefined, {
+                                enabled: true,
+                                field: globalSortField,
+                                desc: globalSortDesc,
+                              });
+                            }
                           }}
-                          style={{ width: '80px' }}
+                          style={{ width: '160px' }}
+                        />
+                        <span>DESC:</span>
+                        <Switch
+                          value={globalSortDesc}
+                          disabled={!useGlobalSort}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            const next = e.currentTarget.checked;
+                            setGlobalSortDesc(next);
+                            generateLogsQL(true, undefined, {
+                              enabled: useGlobalSort,
+                              field: globalSortField,
+                              desc: next,
+                            });
+                          }}
                         />
                       </div>
                     </td>
@@ -2994,7 +3229,84 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                           }}
                         />
                       </div>
-
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>Remove fields:</td>
+                    <td>
+                      <div style={{ marginTop: '6px', display: 'inline-flex', gap: '12px', alignItems: 'center' }}>
+                        <Switch
+                          value={removeFieldsEnabled}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            const next = e.currentTarget.checked;
+                            setRemoveFieldsEnabled(next);
+                            generateLogsQL(true, { enabled: next, text: removeFieldsText });
+                          }}
+                        />
+                        <span>Set Remove Fields</span>
+                        <button
+                          type="button"
+                          id="btnDeleteToSingleLine"
+                          style={{ display: removeFieldsEnabled ? 'block' : 'none' }}
+                          onClick={() => {
+                            const fields = parseRemoveFieldsText(removeFieldsText);
+                            setRemoveFieldsText(formatRemoveFieldsText(fields, 'single'));
+                          }}
+                        >
+                          single line
+                        </button>
+                        <button
+                          type="button"
+                          id="btnDeleteToMultiLine"
+                          style={{ display: removeFieldsEnabled ? 'block' : 'none' }}
+                          onClick={() => {
+                            const fields = parseRemoveFieldsText(removeFieldsText);
+                            setRemoveFieldsText(formatRemoveFieldsText(fields, 'multi'));
+                          }}
+                        >
+                          multi line
+                        </button>
+                      </div>
+                      <div id="removeFieldsContainer" style={{ display: removeFieldsEnabled ? 'block' : 'none' }}>
+                        <TextArea
+                          id="textboxForRemoveFields"
+                          aria-label="Remove fields"
+                          style={{ width: '100%', height: '120px' }}
+                          value={removeFieldsText}
+                          onChange={(e) => setRemoveFieldsText(e.currentTarget.value)}
+                          onBlur={() => {
+                            generateLogsQL(false);
+                          }}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 12px 4px 0', whiteSpace: 'nowrap' }}>output options</td>
+                    <td style={{ padding: '4px 0' }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                          type="checkbox"
+                          checked={limitEnabled}
+                          onChange={(e) => {
+                            setLimitEnabled(e.currentTarget.checked);
+                          }}
+                        />
+                        <span>limit:</span>
+                        <input
+                          id="textboxForLimit"
+                          type="number"
+                          value={limitValue}
+                          onChange={(e) => {
+                            const sanitized = e.currentTarget.value.replace(/\D+/g, '');
+                            setLimitValue(sanitized);
+                          }}
+                          onBlur={() => {
+                            generateLogsQL(true);
+                          }}
+                          style={{ width: '80px' }}
+                        />
+                      </div>
                     </td>
                   </tr>
                   <tr>
@@ -3057,6 +3369,22 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
           createCustomValue={false}
           onChange={onStepComboboxChange}
           placeholder="1m"
+        />
+        Group Fields:&nbsp;
+        <input
+          type="text"
+          key={configuredHitsGroupFields}
+          defaultValue={configuredHitsGroupFields}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              applyTimeSeriesFieldsInput(event.currentTarget.value);
+            }
+          }}
+          onBlur={(event) => {
+            applyTimeSeriesFieldsInput(event.currentTarget.value);
+          }}
+          placeholder={configuredHitsGroupFields}
+          style={{ width: '220px' }}
         />
       </div>
       <div style={{ width: '100%', height: `${timeSeriesHeight}px`, marginTop: '12px', display: 'flex', gap: '12px' }}>
@@ -3217,6 +3545,8 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                         flexDirection: 'column',
                         gap: '8px',
                         paddingRight: '5px',
+                        minWidth: '340px',
+                        width: '340px',
                       }}
                     >
                       {pieChartData.slices.map((slice) => {
@@ -3446,10 +3776,27 @@ const LogFilterPanel: React.FC<PanelProps<LogFilterOptions>> = (props) => {
                   setSaveLogUiToCookie(event.currentTarget.checked);
                 }}
               />
+              <span>show JSON</span>
+              <Switch
+                value={showLogsJson}
+                onChange={(event) => {
+                  setShowLogsJson(event.currentTarget.checked);
+                }}
+              />
             </div>
           </td>
         </tr>
       </table>
+      {showLogsJson && (
+        <div style={{ marginTop: '12px' }}>
+          <TextArea
+            aria-label="Logs JSON"
+            style={{ width: '100%', height: '200px' }}
+            value={logsJsonText}
+            readOnly
+          />
+        </div>
+      )}
 
       <div style={{ marginTop: '12px' }}>
         <LogsPanel
@@ -3503,6 +3850,13 @@ export const plugin = new PanelPlugin<LogFilterOptions>(LogFilterPanel).setPanel
       description:
         'After generating the logsql query statement, it can be output to a variable in a dashboard for other panels to reference.',
       defaultValue: '$logsql',
+    })
+    .addTextInput({
+      path: 'hitsGroupFieldList',
+      name: 'Hits Group Field List',
+      description:
+        'Specify the fields to group by when calculating hit counts. Separate multiple fields with commas.',
+      defaultValue: 'level',
     })
     .addCustomEditor({
       id: 'jsonConfig',
